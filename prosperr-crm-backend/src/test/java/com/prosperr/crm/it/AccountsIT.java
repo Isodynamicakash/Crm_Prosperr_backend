@@ -101,7 +101,8 @@ class AccountsIT extends IntegrationTest {
         stakeholder(bdr1, a, "Kiran Mehta", "CFO", "kiran@searchable.in", "9123456789", null);
         assertEquals(1, get("/api/search?q=searchable", bdr1).path("accounts").size());
         assertEquals(1, get("/api/search?q=kiran@", bdr1).path("stakeholders").size());
-        assertEquals(1, get("/api/search?q=91234%2056789", bdr1).path("stakeholders").size());
+        // MockMvc encodes the URL template itself, so pass the space raw (a pre-encoded %20 would arrive as the text "%20").
+        assertEquals(1, get("/api/search?q=91234 56789", bdr1).path("stakeholders").size());
         assertEquals(0, get("/api/search?q=searchable", bdr2).path("accounts").size(), "prospects stay private in search");
         post("/api/saved-views", bdr1, Map.of("name", "My Large", "entity", "ACCOUNT", "filters", "{\"sizeBucket\":\"LARGE\"}"));
         assertEquals(1, get("/api/saved-views", bdr1).size());
