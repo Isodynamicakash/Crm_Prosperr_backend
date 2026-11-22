@@ -129,8 +129,23 @@ public abstract class IntegrationTest {
     }
 
     protected JsonNode get(String url, UUID as) throws Exception { return call(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get(url), as, null, 200); }
-    protected JsonNode post(String url, UUID as, Object body) throws Exception { return call(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(url), as, body, 200); }
-    protected JsonNode post(String url, UUID as, Object body, int status) throws Exception { return call(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(url), as, body, status); }
+    protected JsonNode post(String url, UUID as, Object body) throws Exception { return post(url, as, body, 200); }
+    protected JsonNode post(String url, UUID as, Object body, int status) throws Exception {
+        meetingHappened(url);
+        return call(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(url), as, body, status);
+    }
+
+    /** Outcomes are only accepted once a meeting has started, so tests that record one move the meeting into the past first. */
+    private void meetingHappened(String url) {
+        var m = java.util.regex.Pattern.compile("^/api/meetings/([0-9a-f-]{36})/outcome$").matcher(url);
+        if (m.matches()) db.update("UPDATE crm.meeting SET scheduled_start = now() - interval '1 hour', scheduled_end = now() - interval '30 minutes' "
+                + "WHERE id = ?::uuid AND scheduled_start > now()", m.group(1));
+    }
+
+    /** Calls the outcome endpoint without moving the meeting, to test the "not started yet" guard. */
+    protected JsonNode postOutcomeAsScheduled(String url, UUID as, Object body, int status) throws Exception {
+        return call(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post(url), as, body, status);
+    }
     protected JsonNode patch(String url, UUID as, Object body) throws Exception { return call(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch(url), as, body, 200); }
     protected JsonNode put(String url, UUID as, Object body) throws Exception { return call(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(url), as, body, 200); }
     protected JsonNode put(String url, UUID as, Object body, int status) throws Exception { return call(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put(url), as, body, status); }

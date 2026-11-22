@@ -92,6 +92,8 @@ public class OpportunityService {
     public Opp update(UUID id, OppUpdate u, Actor actor) {
         Opp o = load(id);
         guard.require(actor, Action.UPDATE_OPPORTUNITY, o.accountId());
+        if (u.expectedMrr() != null && u.expectedMrr().signum() < 0) throw new DomainException("INVALID_MRR", "Expected MRR can't be negative");
+        if (u.licenseCount() != null && u.licenseCount() < 0) throw new DomainException("INVALID_LICENSES", "Licence count can't be negative");
         int v = u.version() == null ? o.version() : u.version();
         int n = jdbc.update("""
                 UPDATE crm.opportunity SET temperature = coalesce(:t, temperature), expected_mrr = coalesce(:mrr, expected_mrr),

@@ -64,6 +64,12 @@ public class StakeholderService implements StakeholderApi {
                 .map(Normalizer::email).flatMap(Optional::stream).distinct().toList();
         List<String[]> cleanPhones = c.phones() == null ? List.of() : c.phones().stream()
                 .map(p -> new String[]{p, Normalizer.phoneE164(p).orElse(null)}).filter(p -> p[1] != null).toList();
+        if (c.emails() != null) for (String e : c.emails()) {
+            if (e != null && !e.isBlank() && Normalizer.email(e).isEmpty()) throw new DomainException("INVALID_EMAIL", "'" + e.trim() + "' is not a valid e-mail address");
+        }
+        if (c.phones() != null) for (String p : c.phones()) {
+            if (p != null && !p.isBlank() && Normalizer.phoneE164(p).isEmpty()) throw new DomainException("INVALID_PHONE", "'" + p.trim() + "' is not a valid phone number");
+        }
         String linkedIn = Normalizer.linkedIn(c.linkedinUrl()).orElse(null);
         checkDuplicates(cleanEmails, cleanPhones, linkedIn, c.allowSharedPhone());
 

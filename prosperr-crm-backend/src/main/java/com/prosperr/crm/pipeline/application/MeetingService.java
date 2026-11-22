@@ -161,6 +161,9 @@ public class MeetingService implements PipelineApi {
         Meeting m = load(meetingId);
         guard.require(actor, Action.UPDATE_MEETINGS, m.accountId());
         if (r.outcome() == null) throw new DomainException("OUTCOME_REQUIRED", "Choose an outcome");
+        if (r.outcome() != MeetingOutcome.RESCHEDULED && m.scheduledStart() != null && Instant.now(clock).isBefore(m.scheduledStart())) {
+            throw new DomainException("MEETING_NOT_STARTED", "This meeting hasn't happened yet. Record the outcome after it starts, or reschedule it.");
+        }
         MeetingStatus status = rules.statusFor(r.outcome());
         jdbc.update("""
                 UPDATE crm.meeting SET outcome = :o, status = :s, notes = coalesce(:notes, notes), next_step = :ns,

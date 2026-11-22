@@ -7,6 +7,7 @@ import com.prosperr.crm.prospecting.application.TaskService;
 import com.prosperr.crm.prospecting.api.TaskApi;
 import com.prosperr.crm.prospecting.domain.MyDayItem;
 import com.prosperr.crm.prospecting.domain.OutcomePlan;
+import com.prosperr.crm.shared.domain.DomainException;
 import com.prosperr.crm.shared.domain.TaskSource;
 import com.prosperr.crm.shared.domain.TaskType;
 import com.prosperr.crm.shared.security.CurrentUser;
@@ -77,6 +78,9 @@ public class ProspectingController {
         var actor = current.get();
         UUID assignee = t.assigneeId() == null ? actor.userId() : t.assigneeId();
         if (!assignee.equals(actor.userId()) && !actor.isLeadership()) throw new ForbiddenException("Only managers assign tasks to others");
+        if (t.accountId() == null) throw new DomainException("ACCOUNT_REQUIRED", "Pick the account this task is for");
+        if (t.title() == null || t.title().isBlank()) throw new DomainException("TITLE_REQUIRED", "Say what needs doing");
+        if (t.dueAt() == null || t.dueAt().isBefore(Instant.now().minusSeconds(300))) throw new DomainException("DUE_IN_PAST", "Pick a due time in the future");
         return Map.of("id", tasks.create(new TaskApi.NewTask(t.accountId(), t.stakeholderId(), null, null,
                 t.type() == null ? TaskType.OTHER : t.type(), t.title(), t.dueAt(), assignee, TaskSource.MANUAL, null, actor.userId())));
     }

@@ -57,6 +57,8 @@ class AssignmentAndPipelineIT extends IntegrationTest {
     @Test
     void M6_3_M6_4_l1CompletedMovesStageToL1_onlyOwnerAeRecordsOutcome() throws Exception {
         var q = qualifiedAccount("Stage Co", 600, ae1);
+        // a future meeting can't have an outcome yet
+        postOutcomeAsScheduled("/api/meetings/" + q.get("meeting") + "/outcome", ae1, Map.of("outcome", "COMPLETED_QUALIFIED"), 422);
         post("/api/meetings/" + q.get("meeting") + "/outcome", ae2, Map.of("outcome", "COMPLETED_QUALIFIED"), 403);
         post("/api/meetings/" + q.get("meeting") + "/outcome", ae1, Map.of("outcome", "COMPLETED_QUALIFIED", "notes", "Good demo",
                 "nextStep", "Send docs", "nextStepDue", today().plusDays(2).toString()));

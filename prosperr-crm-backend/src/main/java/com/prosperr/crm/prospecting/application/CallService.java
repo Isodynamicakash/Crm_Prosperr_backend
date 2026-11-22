@@ -95,6 +95,7 @@ public class CallService {
         }
         if (s.bdrOwnerId() == null && actor.role() == Role.BDR) stakeholders.setBdrOwner(stakeholderId, actor.userId());
 
+        if (req == null || req.outcomeCode() == null || req.outcomeCode().isBlank()) throw new DomainException("OUTCOME_REQUIRED", "Choose a call outcome");
         LoadedRule lr = rule(req.outcomeCode());
         OutcomePlan plan = planner.plan(lr.rule(), s.callAttempts(), today(), req.followUpDate(), req.reason());
         if (req.overrideStatus() != null) plan = plan.withStatus(req.overrideStatus());

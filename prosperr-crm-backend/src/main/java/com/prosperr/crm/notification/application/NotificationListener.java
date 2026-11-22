@@ -6,6 +6,7 @@ import com.prosperr.crm.lifecycle.api.LifecycleEvents;
 import com.prosperr.crm.outreach.api.OutreachEvents;
 import com.prosperr.crm.qualification.api.SqlRejected;
 import com.prosperr.crm.qualification.api.SqlSubmitted;
+import com.prosperr.crm.qualification.api.SqlValidated;
 import com.prosperr.crm.shared.domain.EngagementStatus;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
@@ -22,6 +23,12 @@ import java.util.UUID;
 public class NotificationListener {
     private final NotificationService n;
     public NotificationListener(NotificationService n) { this.n = n; }
+
+    @EventListener
+    public void sqlValidated(SqlValidated e) {
+        if (e.submittedBy() != null) n.notify(List.of(e.submittedBy()), "SQL_APPROVED", "SQL approved: " + n.accountName(e.accountId()),
+                "Qualified — the manager will assign an AE.", "account", e.accountId());
+    }
 
     @EventListener
     public void sqlSubmitted(SqlSubmitted e) {
