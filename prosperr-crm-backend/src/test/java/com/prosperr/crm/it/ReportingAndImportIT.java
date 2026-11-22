@@ -33,6 +33,38 @@ class ReportingAndImportIT extends IntegrationTest {
     }
 
     @Test
+    void Pulse_dailySeriesOutcomeMixAndFeed_scopedByRole() throws Exception {
+        var q = qualifiedAccount("Pulse Co", 600, ae1);
+        post("/api/meetings/" + q.get("meeting") + "/outcome", ae1, Map.of("outcome", "COMPLETED_QUALIFIED"));
+        JsonNode mine = get("/api/dashboards/pulse?preset=7", bdr1);
+        assertEquals(7, mine.path("series").size(), "one point per day in the period");
+        int calls = 0, sqls = 0;
+        for (JsonNode d : mine.path("series")) { calls += d.path("calls").asInt(); sqls += d.path("sqls").asInt(); }
+        assertTrue(calls >= 1, "the L1-booked call is counted");
+        assertEquals(1, sqls);
+        assertTrue(mine.path("outcomeMix").size() >= 1);
+        assertTrue(mine.path("feed").size() >= 1);
+        assertEquals(0, sum(get("/api/dashboards/pulse?preset=7", bdr2).path("series"), "sqls"), "another BDR sees only their own work");
+        assertEquals(1, sum(get("/api/dashboards/pulse?preset=7", manager).path("series"), "sqls"), "leadership sees the team");
+        assertTrue(sum(get("/api/dashboards/pulse?preset=7", ae1).path("series"), "meetingsDone") >= 1, "the AE's completed meeting counts");
+    }
+
+    @Test
+    void Dashboards_showThisMonthsTargets_evenWhenThePeriodStartsLastMonth() throws Exception {
+        String range = "?from=" + today().minusMonths(1).withDayOfMonth(1) + "&to=" + today();
+        put("/api/targets", manager, Map.of("userId", bdr1, "periodType", "MONTH", "periodDate", today().withDayOfMonth(1).toString(), "metric", "L1_BOOKED", "value", 10));
+        put("/api/targets", manager, Map.of("userId", ae1, "periodType", "MONTH", "periodDate", today().withDayOfMonth(1).toString(), "metric", "WON", "value", 2));
+        assertEquals(1, get("/api/dashboards/bdr" + range, bdr1).path("targets").size(), "the period starts last month, targets are this month's");
+        assertEquals(1, get("/api/dashboards/ae" + range, ae1).path("targets").size());
+    }
+
+    private static int sum(JsonNode series, String field) {
+        int n = 0;
+        for (JsonNode d : series) n += d.path(field).asInt();
+        return n;
+    }
+
+    @Test
     void Dashboards_everyNumberOpensItsAccounts_andExportsCsv() throws Exception {
         qualifiedAccount("Drill Co", 600, ae1);
         assertEquals(1, get("/api/dashboards/drilldown?metric=activePipeline", manager).size());

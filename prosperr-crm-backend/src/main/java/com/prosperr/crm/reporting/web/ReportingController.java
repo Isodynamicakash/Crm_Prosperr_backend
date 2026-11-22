@@ -43,6 +43,15 @@ public class ReportingController {
         return a.userId();
     }
 
+    /** Live pulse for every role: own work for BDR / AE, the whole team for managers and admins. */
+    @GetMapping("/dashboards/pulse")
+    public Map<String, Object> pulse(@RequestParam(required = false) String preset,
+                                     @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+                                     @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        Actor a = current.get();
+        return dashboards.pulse(a.isLeadership() ? null : a.userId(), a.role() == Role.AE, dashboards.range(preset, from, to));
+    }
+
     @GetMapping("/dashboards/bdr")
     public Map<String, Object> bdr(@RequestParam(required = false) UUID bdrId, @RequestParam(required = false) String preset,
                                    @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,

@@ -54,6 +54,64 @@ public class DashboardService {
         return v == null ? 0 : v;
     }
 
+    // ------------------------------------------------------------------ Live pulse (all roles)
+
+    /**
+     * Daily activity series, call-outcome mix, current stage mix and the latest activity feed.
+     * Scope: a BDR or AE sees their own work; managers and admins see the whole team ({@code user == null}).
+     */
+    public Map<String, Object> pulse(UUID user, boolean ae, LocalDate[] r) {
+        MapSqlParameterSource p = new MapSqlParameterSource().addValue("u", user, java.sql.Types.OTHER)
+                .addValue("from", r[0]).addValue("to", r[1]).addValue("connects", CONNECT_CODES).addValue("ae", ae);
+        String day = "(%s AT TIME ZONE 'Asia/Kolkata')::date";
+        String mine = "(CAST(:u AS uuid) IS NULL OR %s)";
+        String accountScope = "(CAST(:u AS uuid) IS NULL OR (:ae AND a.ae_owner_id = :u) OR (NOT :ae AND EXISTS "
+                + "(SELECT 1 FROM crm.account_bdr ab WHERE ab.account_id = a.id AND ab.bdr_id = :u)))";
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("from", r[0]);
+        m.put("to", r[1].minusDays(1));
+        m.put("generatedAt", Instant.now(clock));
+        m.put("series", jdbc.queryForList("""
+                WITH d AS (SELECT generate_series(CAST(:from AS date), CAST(:to AS date) - 1, interval '1 day')::date AS day)
+                SELECT d.day,
+                  (SELECT count(*) FROM crm.activity act WHERE act.type = 'CALL' AND %1$s = d.day AND %2$s) AS "calls",
+                  (SELECT count(*) FROM crm.activity act JOIN crm.picklist_value pv ON pv.id = act.call_outcome_id
+                     WHERE act.type = 'CALL' AND pv.code IN (:connects) AND %1$s = d.day AND %2$s) AS "connects",
+                  (SELECT count(*) FROM crm.sql_submission s WHERE %3$s = d.day AND %4$s) AS "sqls",
+                  (SELECT count(*) FROM crm.meeting mt WHERE mt.rescheduled_from_id IS NULL AND %5$s = d.day AND %6$s) AS "meetingsBooked",
+                  (SELECT count(*) FROM crm.meeting mt WHERE mt.status = 'COMPLETED' AND %7$s = d.day AND %6$s) AS "meetingsDone",
+                  (SELECT count(*) FROM crm.stage_history sh JOIN crm.account a ON a.id = sh.account_id
+                     WHERE sh.to_stage = 'WON' AND %8$s = d.day AND %9$s) AS "wins"
+                  FROM d ORDER BY d.day""".formatted(
+                        day.formatted("act.occurred_at"), mine.formatted("act.logged_by = :u"),
+                        day.formatted("s.submitted_at"), mine.formatted("s.submitted_by = :u"),
+                        day.formatted("mt.booked_on"), mine.formatted("(mt.booked_by = :u OR mt.ae_id = :u)"),
+                        day.formatted("mt.outcome_recorded_at"), day.formatted("sh.changed_at"), accountScope), p));
+        m.put("outcomeMix", jdbc.queryForList("""
+                SELECT pv.label AS "outcome", pv.code, count(*) AS "count", (pv.code IN (:connects)) AS "connect"
+                  FROM crm.activity act JOIN crm.picklist_value pv ON pv.id = act.call_outcome_id
+                 WHERE act.type = 'CALL' AND %s >= :from AND %s < :to AND %s
+                 GROUP BY pv.label, pv.code ORDER BY count(*) DESC""".formatted(
+                        day.formatted("act.occurred_at"), day.formatted("act.occurred_at"), mine.formatted("act.logged_by = :u")), p));
+        m.put("stageMix", jdbc.queryForList("""
+                SELECT a.lifecycle_stage AS "stage", count(*) AS "count",
+                       coalesce(sum(o.expected_mrr), 0) AS "mrr"
+                  FROM crm.account a LEFT JOIN crm.opportunity o ON o.account_id = a.id AND o.closed_at IS NULL
+                 WHERE a.account_status = 'ACTIVE' AND """ + accountScope + """
+                 GROUP BY a.lifecycle_stage""", p));
+        m.put("feed", jdbc.queryForList("""
+                SELECT act.id, act.type, act.remarks, act.occurred_at AS "occurredAt", u.full_name AS "by",
+                       a.id AS "accountId", a.name AS "accountName",
+                       s.first_name || coalesce(' ' || s.last_name, '') AS "stakeholder", pv.label AS "outcome"
+                  FROM crm.activity act JOIN crm.account a ON a.id = act.account_id
+                  LEFT JOIN crm.app_user u ON u.id = act.logged_by
+                  LEFT JOIN crm.stakeholder s ON s.id = act.stakeholder_id
+                  LEFT JOIN crm.picklist_value pv ON pv.id = act.call_outcome_id
+                 WHERE (CAST(:u AS uuid) IS NULL OR act.logged_by = :u OR (:ae AND a.ae_owner_id = :u))
+                 ORDER BY act.occurred_at DESC LIMIT 20""", p));
+        return m;
+    }
+
     // ------------------------------------------------------------------ BDR (BRD 10.2)
 
     public Map<String, Object> bdr(UUID bdrId, LocalDate[] r) {
@@ -81,7 +139,7 @@ public class DashboardService {
         m.put("sqlToL1DonePct", submitted == 0 ? null : Math.round(1000.0 * (long) m.get("l1Done") / submitted) / 10.0);
         m.put("revivalAccountsDue", count("""
                 SELECT count(*) FROM crm.v_revival_queue v WHERE EXISTS (SELECT 1 FROM crm.account_bdr ab WHERE ab.account_id = v.account_id AND ab.bdr_id = :u)""", p));
-        m.put("targets", targets.achievement(bdrId, PeriodType.MONTH, r[0]));
+        m.put("targets", targets.achievement(bdrId, PeriodType.MONTH, r[1].minusDays(1)));
         return m;
     }
 
@@ -122,7 +180,7 @@ public class DashboardService {
                   FROM crm.opportunity o JOIN crm.account a ON a.id = o.account_id
                  WHERE a.ae_owner_id = :u AND a.account_status = 'ACTIVE' AND o.stage NOT IN ('WON','LOST','IMPLEMENTATION')
                  GROUP BY 1 ORDER BY 1""", p));
-        m.put("targets", targets.achievement(aeId, PeriodType.MONTH, r[0]));
+        m.put("targets", targets.achievement(aeId, PeriodType.MONTH, r[1].minusDays(1)));
         return m;
     }
 
