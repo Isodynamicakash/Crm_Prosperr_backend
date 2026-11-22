@@ -1,0 +1,12 @@
+
+  spring:
+    datasource:
+      url: jdbc:postgresql://aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres?currentSchema=crm&sslmode=require
+      username: postgres.owiqnvlfyzbzcsptkhkg
+      password: Akashsinha@13
+  crm:
+    auth:
+      jwt-secret: prosperr-local-dev-secret-change-me-0123456789abcdef
+      dev-login-enabled: true
+  server:
+    port: 8081

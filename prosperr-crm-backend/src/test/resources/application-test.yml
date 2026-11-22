@@ -1,0 +1,6 @@
+crm:
+  auth:
+    jwt-secret: test-secret-test-secret-test-secret-0123456789
+    dev-login-enabled: true
+  jobs:
+    enabled: false

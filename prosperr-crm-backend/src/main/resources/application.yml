@@ -1,0 +1,60 @@
+spring:
+  application:
+    name: prosperr-crm
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/postgres?currentSchema=crm}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        default_schema: crm
+        jdbc:
+          time_zone: UTC
+  flyway:
+    schemas: crm
+    default-schema: crm
+    locations: classpath:db/migration
+    placeholder-replacement: false
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    default-property-inclusion: always
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 20MB
+
+server:
+  port: ${PORT:8080}
+  error:
+    include-message: always
+
+crm:
+  auth:
+    jwt-secret: ${JWT_SECRET:change-me-in-production-to-a-long-random-secret-0123456789}
+    token-ttl: ${TOKEN_TTL:12h}
+    google-client-id: ${GOOGLE_CLIENT_ID:set-your-google-oauth-client-id}
+    dev-login-enabled: ${DEV_LOGIN_ENABLED:false}
+  app:
+    base-url: ${APP_BASE_URL:http://localhost:8080}
+    frontend-url: ${FRONTEND_URL:http://localhost:5173}
+  jobs:
+    enabled: ${JOBS_ENABLED:true}
+  mail:
+    provider: ${MAIL_PROVIDER:log}
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

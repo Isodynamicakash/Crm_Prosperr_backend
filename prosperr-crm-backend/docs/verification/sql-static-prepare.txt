@@ -1,0 +1,17 @@
+PREPARED OK: 258  FAILED: 16
+ - shared/jdbc/DbSession.java line 15 | ERROR:  syntax error at or near "," | SELECT set_config('crm.current_user', ?, true)
+ - reporting/application/TargetService.java line 85 | ERROR:  syntax error at or near ";" | SELECT count(*) FROM crm.meeting m WHERE
+ - reporting/application/ReportService.java line 132 | ERROR:  column "s.location_priority" must appear in the GROUP BY clause or be used in an aggregate function | SELECT coalesce(s.location_priority, 'NONE') AS "locationPriority", count(*) AS "submitted
+ - reporting/application/ReportService.java line 137 | ERROR:  column "st.level" must appear in the GROUP BY clause or be used in an aggregate function | SELECT CASE WHEN st.level IN (1, 2) THEN 'L' || st.level                                  
+ - reporting/application/ReportService.java line 144 | ERROR:  column "u.full_name" must appear in the GROUP BY clause or be used in an aggregate function | SELECT u.full_name AS "bdr", count(*) AS "submitted", count(*) FILTER (WHERE s.status = 'Q
+ - reporting/application/ReportService.java line 53 | ERROR:  missing FROM-clause entry for table "a" | SELECT a.id AS "accountId", a.name AS "account", a.lifecycle_stage AS "stage", u.full_name
+ - reporting/application/DashboardService.java line 148 | ERROR:  syntax error at or near ";" | SELECT count(DISTINCT s.account_id) FROM crm.sql_submission s WHERE s.account_id IN (
+ - reporting/application/DashboardService.java line 153 | ERROR:  unterminated quoted string at or near "'; DEALLOCATE s37;" | SELECT count(DISTINCT h.account_id) FROM crm.stage_history h WHERE h.to_stage = '
+ - reporting/application/DashboardService.java line 165 | ERROR:  syntax error at or near ";" | WITH h AS (                   SELECT h.opportunity_id, h.to_stage, h.changed_at,          
+ - reporting/application/DashboardService.java line 174 | ERROR:  column "a.lifecycle_stage" must appear in the GROUP BY clause or be used in an aggregate function | SELECT a.lifecycle_stage AS "stage", count(*) AS "count" FROM crm.account a               
+ - reporting/application/DashboardService.java line 180 | ERROR:  syntax error at or near ";" | SELECT o.stage AS "outcome", count(*) AS "count", coalesce(sum(o.expected_mrr), 0) AS "mrr
+ - reporting/application/DashboardService.java line 190 | ERROR:  syntax error at or near ";" | SELECT coalesce(sum(o.expected_mrr), 0) FROM crm.opportunity o WHERE o.stage NOT IN ('WON'
+ - reporting/application/DashboardService.java line 193 | ERROR:  column "u.full_name" must appear in the GROUP BY clause or be used in an aggregate function | SELECT coalesce(u.full_name, 'Unassigned') AS "ae", a.lifecycle_stage AS "stage", count(*)
+ - reporting/application/DashboardService.java line 197 | ERROR:  column "u.full_name" must appear in the GROUP BY clause or be used in an aggregate function | SELECT coalesce(u.full_name, 'None') AS "bdr", a.lifecycle_stage AS "stage", count(*) AS "
+ - reporting/application/DashboardService.java line 188 | ERROR:  column "a.account_status" must appear in the GROUP BY clause or be used in an aggregate function | SELECT a.account_status AS "status", count(*) AS "count" FROM crm.account a
+ - qualification/application/SqlService.java line 318 | ERROR:  syntax error at or near ";" | SELECT CAST(

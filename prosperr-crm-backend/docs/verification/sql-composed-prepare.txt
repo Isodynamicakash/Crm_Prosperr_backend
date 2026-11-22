@@ -1,0 +1,1 @@
+distinct composed statements OK: 98  FAILED: 0

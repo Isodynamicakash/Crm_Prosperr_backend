@@ -1,0 +1,8 @@
+package com.prosperr.crm.shared.domain;
+
+/** Values mirror the CHECK constraint in V1__init.sql. */
+public enum LocationPriority {
+    P0,
+    P1,
+    NONE
+}
