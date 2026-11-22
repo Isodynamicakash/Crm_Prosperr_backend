@@ -1,12 +1,14 @@
-
-  spring:
-    datasource:
-      url: jdbc:postgresql://aws-1-ap-southeast-1.pooler.supabase.com:5432/postgres?currentSchema=crm&sslmode=require
-      username: postgres.owiqnvlfyzbzcsptkhkg
-      password: Akashsinha@13
-  crm:
-    auth:
-      jwt-secret: prosperr-local-dev-secret-change-me-0123456789abcdef
-      dev-login-enabled: true
-  server:
-    port: 8081
+# Local development profile (run with -Dspring-boot.run.profiles=local).
+# Never put real credentials in this file: it is committed. Pass them as environment variables instead:
+#   DB_URL, DB_USERNAME, DB_PASSWORD, JWT_SECRET
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/prosperr_crm?currentSchema=crm}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+crm:
+  auth:
+    jwt-secret: ${JWT_SECRET:local-dev-only-secret-not-for-production-0123456789abcdef}
+    dev-login-enabled: true
+server:
+  port: 8081
