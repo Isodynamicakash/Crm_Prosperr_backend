@@ -237,6 +237,30 @@ public class MeetingService implements PipelineApi {
                  ORDER BY m.scheduled_start""", new MapSqlParameterSource().addValue("ae", aeId));
     }
 
+    /** Meetings due today and in the future, scoped to the signed-in AE. */
+    public List<Map<String, Object>> schedule(UUID aeId) {
+        Instant todayStart = LocalDate.now(clock.withZone(Ist.ZONE)).atStartOfDay(Ist.ZONE).toInstant();
+        return jdbc.queryForList("""
+                SELECT m.id, m.level, m.also_completes_l2 AS "alsoCompletesL2",
+                       m.status, m.scheduled_start AS "scheduledStart", m.scheduled_end AS "scheduledEnd",
+                       m.meeting_link AS "meetingLink", m.next_step AS "nextStep", m.next_step_due AS "nextStepDue",
+                       bk.full_name AS "bookedBy", ae.full_name AS "ae",
+                       a.id AS "accountId", a.name AS "accountName",
+                       (SELECT string_agg(s.first_name || coalesce(' ' || s.last_name, ''), ', ')
+                          FROM crm.meeting_attendee ma JOIN crm.stakeholder s ON s.id = ma.stakeholder_id
+                         WHERE ma.meeting_id = m.id) AS "attendees"
+                  FROM crm.meeting m
+                  JOIN crm.account a ON a.id = m.account_id
+                  JOIN crm.app_user bk ON bk.id = m.booked_by
+                  LEFT JOIN crm.app_user ae ON ae.id = m.ae_id
+                 WHERE m.ae_id = :ae
+                   AND m.outcome IS NULL
+                   AND m.status IN ('SCHEDULED','RESCHEDULED')
+                   AND m.scheduled_start >= :from
+                 ORDER BY m.scheduled_start""",
+                new MapSqlParameterSource().addValue("ae", aeId).addValue("from", Db.ts(todayStart)));
+    }
+
     public List<Map<String, Object>> forAccount(UUID accountId, Actor actor) {
         guard.require(actor, Action.VIEW_PIPELINE, accountId);
         return jdbc.queryForList("""
