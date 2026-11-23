@@ -15,6 +15,20 @@ import static org.junit.jupiter.api.Assertions.*;
 class ReportingAndImportIT extends IntegrationTest {
 
     @Test
+    void AeActiveExcludesWonLostAndImplementation() throws Exception {
+        var won = qualifiedAccount("Won Active Count", 600, ae1);
+        var lost = qualifiedAccount("Lost Active Count", 600, ae1);
+        var implementation = qualifiedAccount("Implementation Active Count", 600, ae1);
+
+        db.update("UPDATE crm.account SET lifecycle_stage = 'WON' WHERE id = ?", won.get("account"));
+        db.update("UPDATE crm.account SET lifecycle_stage = 'LOST' WHERE id = ?", lost.get("account"));
+        db.update("UPDATE crm.account SET lifecycle_stage = 'IMPLEMENTATION' WHERE id = ?", implementation.get("account"));
+
+        JsonNode ae = get("/api/dashboards/ae", ae1);
+        assertEquals(0, ae.path("active").asInt());
+    }
+
+    @Test
     void Dashboards_bdrAeLeadershipHygieneAllAnswer() throws Exception {
         var q = qualifiedAccount("Dash Co", 600, ae1);
         post("/api/meetings/" + q.get("meeting") + "/outcome", ae1, Map.of("outcome", "COMPLETED_QUALIFIED"));
