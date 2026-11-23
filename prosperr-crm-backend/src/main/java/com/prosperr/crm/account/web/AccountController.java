@@ -61,8 +61,12 @@ public class AccountController {
                                   @RequestParam(defaultValue = "50") int size,
                                   @RequestParam(required = false) String sort,
                                   @RequestParam(required = false) String format) {
+        var actor = current.get();
+        if (actor.role() == com.prosperr.crm.shared.domain.Role.AE && aeId != null && !aeId.equals(actor.userId())) {
+            throw new ForbiddenException("An AE can list only their own leads");
+        }
         AccountFilter f = new AccountFilter(q, status, stage, zone, aeId, bdrId, cityId, sizeBucket, industryId, temperature,
-                flagged, from, to, Boolean.TRUE.equals(workedByMe) ? current.get().userId() : null);
+                flagged, from, to, Boolean.TRUE.equals(workedByMe) ? actor.userId() : null);
         if (format != null && !format.equalsIgnoreCase("json")) {
             return TableExport.respond(queries.list(f, current.get(), 0, 100_000, sort).items(), format, "accounts");
         }
