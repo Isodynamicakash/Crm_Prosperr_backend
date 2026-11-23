@@ -75,6 +75,14 @@ public class ReportingController {
         return dashboards.scoreboard(dashboards.range(preset, from, to));
     }
 
+    /** A BDR's own L1-L3 numbers against prorated targets for any period, split by week. Managers may pass bdrId. */
+    @GetMapping("/dashboards/bdr/scoreboard")
+    public Map<String, Object> myScoreboard(@RequestParam(required = false) UUID bdrId, @RequestParam(required = false) String preset,
+                                            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+                                            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        return dashboards.myScoreboard(self(bdrId, Role.BDR), dashboards.range(preset, from, to));
+    }
+
     @GetMapping("/dashboards/leadership")
     @PreAuthorize("hasAnyRole('MANAGER','ADMIN')")
     public Map<String, Object> leadership(@RequestParam(required = false) String preset,

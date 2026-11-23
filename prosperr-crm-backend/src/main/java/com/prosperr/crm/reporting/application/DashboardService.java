@@ -32,6 +32,18 @@ public class DashboardService {
         this.jdbc = jdbc; this.targets = targets; this.clock = clock;
     }
 
+    /**
+     * The window targets are counted over: the range itself, except "this month" / "this quarter" (a range that starts on the
+     * period's first day and runs to today), which get the whole period's target rather than the share up to today.
+     */
+    LocalDate[] targetWindow(LocalDate[] r) {
+        LocalDate today = LocalDate.now(clock.withZone(Ist.ZONE));
+        if (!r[1].equals(today.plusDays(1))) return r;
+        if (r[0].equals(TargetService.periodStart(PeriodType.QUARTER, today))) return new LocalDate[]{r[0], r[0].plusMonths(3)};
+        if (r[0].equals(today.withDayOfMonth(1))) return new LocalDate[]{r[0], r[0].plusMonths(1)};
+        return r;
+    }
+
     /** Presets: 7, 15, 30 days, this month, this quarter (PRD dashboards). */
     public LocalDate[] range(String preset, LocalDate from, LocalDate to) {
         LocalDate today = LocalDate.now(clock.withZone(Ist.ZONE));
@@ -50,37 +62,11 @@ public class DashboardService {
      * Targets are the monthly/weekly targets overlapping the range, prorated by the days of each period that fall inside it.
      */
     public Map<String, Object> scoreboard(LocalDate[] r) {
-        var params = new MapSqlParameterSource().addValue("from", r[0]).addValue("to", r[1]);
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("from", r[0]);
         m.put("to", r[1].minusDays(1));
-        m.put("bdrs", jdbc.queryForList("""
-                SELECT u.id AS "userId", u.full_name AS "name",
-                  (SELECT count(*) FROM crm.meeting mt JOIN crm.account a ON a.id = mt.account_id
-                    WHERE mt.level = 'L1' AND mt.rescheduled_from_id IS NULL AND (mt.booked_by = u.id OR a.sql_credit_bdr_id = u.id)
-                      AND mt.booked_on >= :from AND mt.booked_on < :to) AS "l1Booked",
-                  (SELECT count(*) FROM crm.meeting mt JOIN crm.account a ON a.id = mt.account_id
-                    WHERE mt.level = 'L1' AND mt.status = 'COMPLETED' AND (mt.booked_by = u.id OR a.sql_credit_bdr_id = u.id)
-                      AND mt.scheduled_start >= :from AND mt.scheduled_start < :to) AS "l1Done",
-                  (SELECT count(*) FROM crm.meeting mt JOIN crm.account a ON a.id = mt.account_id
-                    WHERE mt.level = 'L2' AND mt.status = 'COMPLETED' AND (mt.booked_by = u.id OR a.sql_credit_bdr_id = u.id)
-                      AND mt.scheduled_start >= :from AND mt.scheduled_start < :to) AS "l2Done",
-                  (SELECT count(*) FROM crm.meeting mt JOIN crm.account a ON a.id = mt.account_id
-                    WHERE mt.level = 'L3' AND mt.status = 'COMPLETED' AND (mt.booked_by = u.id OR a.sql_credit_bdr_id = u.id)
-                      AND mt.scheduled_start >= :from AND mt.scheduled_start < :to) AS "l3Done",
-                  (SELECT count(*) FROM crm.activity act WHERE act.type = 'CALL' AND act.logged_by = u.id
-                      AND act.occurred_at >= :from AND act.occurred_at < :to) AS "calls",
-                  (SELECT round(sum(t.target_value * (least(p.e, :to::date) - greatest(t.period_start, :from::date))::numeric / (p.e - t.period_start)))
-                     FROM crm.target t, LATERAL (SELECT CASE WHEN t.period_type = 'MONTH' THEN (t.period_start + interval '1 month')::date
-                                                             ELSE t.period_start + 7 END AS e) p
-                    WHERE t.user_id = u.id AND t.metric = 'L1_DONE' AND t.period_start < :to AND p.e > :from AND t.period_type IN ('MONTH', 'WEEK')
-                      AND (t.period_type = 'MONTH' OR NOT EXISTS (SELECT 1 FROM crm.target t2 WHERE t2.user_id = u.id AND t2.metric = 'L1_DONE'
-                           AND t2.period_type = 'MONTH' AND t2.period_start = date_trunc('month', t.period_start)::date))) AS "l1DoneTarget",
-                  (SELECT round(sum(t.target_value * (least(p.e, :to::date) - greatest(t.period_start, :from::date))::numeric / (p.e - t.period_start)))
-                     FROM crm.target t, LATERAL (SELECT (t.period_start + interval '1 month')::date AS e) p
-                    WHERE t.user_id = u.id AND t.metric = 'L1_BOOKED' AND t.period_type = 'MONTH'
-                      AND t.period_start < :to AND p.e > :from) AS "l1BookedTarget"
-                  FROM crm.app_user u WHERE u.role = 'BDR' AND u.is_active ORDER BY u.full_name""", params));
+        m.put("bdrs", bdrRows(null, r, true));
+        var params = new MapSqlParameterSource().addValue("from", r[0]).addValue("to", r[1]);
         m.put("aes", jdbc.queryForList("""
                 SELECT u.id AS "userId", u.full_name AS "name",
                   (SELECT count(*) FROM crm.meeting mt WHERE mt.ae_id = u.id AND mt.level = 'L1' AND mt.status = 'COMPLETED'
@@ -99,6 +85,72 @@ public class DashboardService {
                       AND a.lifecycle_stage NOT IN ('WON','LOST','IMPLEMENTATION')) AS "openDeals"
                   FROM crm.app_user u WHERE u.role = 'AE' AND u.is_active ORDER BY u.full_name""", params));
         return m;
+    }
+
+    /** One BDR's own L1 booked / L1-L2-L3 done against prorated targets, with a week-by-week split of the range. */
+    public Map<String, Object> myScoreboard(UUID bdrId, LocalDate[] r) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("from", r[0]);
+        m.put("to", r[1].minusDays(1));
+        List<Map<String, Object>> rows = bdrRows(bdrId, r, true);
+        m.put("me", rows.isEmpty() ? null : rows.get(0));
+        List<Map<String, Object>> weeks = new ArrayList<>();
+        boolean monthly = java.time.temporal.ChronoUnit.DAYS.between(r[0], r[1]) > 70;   // long ranges: one row per month
+        m.put("bucket", monthly ? "MONTH" : "WEEK");
+        LocalDate first = monthly ? r[0].withDayOfMonth(1) : r[0].minusDays(r[0].getDayOfWeek().getValue() - 1L);
+        for (LocalDate wk = first; wk.isBefore(r[1]); wk = monthly ? wk.plusMonths(1) : wk.plusWeeks(1)) {
+            LocalDate next = monthly ? wk.plusMonths(1) : wk.plusWeeks(1);
+            LocalDate a = wk.isBefore(r[0]) ? r[0] : wk, b = next.isAfter(r[1]) ? r[1] : next;
+            List<Map<String, Object>> w = bdrRows(bdrId, new LocalDate[]{a, b}, false);
+            Map<String, Object> row = new LinkedHashMap<>(w.isEmpty() ? Map.of() : w.get(0));
+            row.put("weekStart", a);
+            row.put("weekEnd", b.minusDays(1));
+            weeks.add(row);
+        }
+        m.put("weeks", weeks);
+        return m;
+    }
+
+    private static String meetings(String level, String status, String dateCol) {
+        return "(SELECT count(*) FROM crm.meeting mt JOIN crm.account a ON a.id = mt.account_id WHERE mt.level = '" + level + "'"
+                + (status == null ? " AND mt.rescheduled_from_id IS NULL" : " AND mt.status = '" + status + "'")
+                + " AND (mt.booked_by = u.id OR a.sql_credit_bdr_id = u.id) AND mt." + dateCol + " >= :from AND mt." + dateCol + " < :to)";
+    }
+
+    /**
+     * Target for a metric over [from, to), summed day by day. A day takes its share of the WEEK target covering it (weeks are
+     * clipped at month end, as in the sheets) or else of the MONTH target; for whole months inside the range the MONTH target wins,
+     * so a calendar month shows exactly the monthly number.
+     */
+    private static String target(String metric) {
+        String week = "(SELECT t.target_value / (least(t.period_start + 7, (date_trunc('month', t.period_start) + interval '1 month')::date) - t.period_start)"
+                + " FROM crm.target t WHERE t.user_id = u.id AND t.metric = '" + metric + "' AND t.period_type = 'WEEK'"
+                + " AND g.d >= t.period_start AND g.d < least(t.period_start + 7, (date_trunc('month', t.period_start) + interval '1 month')::date) LIMIT 1)";
+        String month = "(SELECT t.target_value / ((t.period_start + interval '1 month')::date - t.period_start)"
+                + " FROM crm.target t WHERE t.user_id = u.id AND t.metric = '" + metric + "' AND t.period_type = 'MONTH'"
+                + " AND t.period_start = date_trunc('month', g.d)::date LIMIT 1)";
+        String wholeMonth = "(date_trunc('month', g.d)::date >= :tfrom::date AND (date_trunc('month', g.d) + interval '1 month')::date <= :tto::date)";
+        return "(SELECT round(sum(CASE WHEN " + wholeMonth + " THEN coalesce(" + month + ", " + week + ") ELSE coalesce(" + week + ", " + month + ") END), 1)"
+                + " FROM (SELECT gs::date AS d FROM generate_series(:tfrom::date, :tto::date - 1, interval '1 day') gs) g)";
+    }
+
+    private List<Map<String, Object>> bdrRows(UUID bdrId, LocalDate[] r, boolean wholePeriod) {
+        LocalDate[] tw = wholePeriod ? targetWindow(r) : r;
+        var params = new MapSqlParameterSource().addValue("from", r[0]).addValue("to", r[1]).addValue("uid", bdrId)
+                .addValue("tfrom", tw[0]).addValue("tto", tw[1]);
+        return jdbc.queryForList("SELECT u.id AS \"userId\", u.full_name AS \"name\", "
+                + meetings("L1", null, "booked_on") + " AS \"l1Booked\", "
+                + meetings("L1", "COMPLETED", "scheduled_start") + " AS \"l1Done\", "
+                + meetings("L2", "COMPLETED", "scheduled_start") + " AS \"l2Done\", "
+                + meetings("L3", "COMPLETED", "scheduled_start") + " AS \"l3Done\", "
+                + "(SELECT count(*) FROM crm.activity act WHERE act.type = 'CALL' AND act.logged_by = u.id"
+                + " AND act.occurred_at >= :from AND act.occurred_at < :to) AS \"calls\", "
+                + target("L1_BOOKED") + " AS \"l1BookedTarget\", "
+                + target("L1_DONE") + " AS \"l1DoneTarget\", "
+                + target("L2_DONE") + " AS \"l2DoneTarget\", "
+                + target("L3_DONE") + " AS \"l3DoneTarget\" "
+                + "FROM crm.app_user u WHERE u.role = 'BDR' AND (u.is_active OR u.id = CAST(:uid AS uuid)) AND (CAST(:uid AS uuid) IS NULL OR u.id = CAST(:uid AS uuid)) "
+                + "ORDER BY u.full_name", params);
     }
 
     private static MapSqlParameterSource p(UUID user, LocalDate[] r) {
