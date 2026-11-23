@@ -45,6 +45,62 @@ public class DashboardService {
         };
     }
 
+    /**
+     * Team scoreboard for any period (the "planned view"): per BDR, meetings they sourced; per AE, meetings they ran.
+     * Targets are the monthly/weekly targets overlapping the range, prorated by the days of each period that fall inside it.
+     */
+    public Map<String, Object> scoreboard(LocalDate[] r) {
+        var params = new MapSqlParameterSource().addValue("from", r[0]).addValue("to", r[1]);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("from", r[0]);
+        m.put("to", r[1].minusDays(1));
+        m.put("bdrs", jdbc.queryForList("""
+                SELECT u.id AS "userId", u.full_name AS "name",
+                  (SELECT count(*) FROM crm.meeting mt JOIN crm.account a ON a.id = mt.account_id
+                    WHERE mt.level = 'L1' AND mt.rescheduled_from_id IS NULL AND (mt.booked_by = u.id OR a.sql_credit_bdr_id = u.id)
+                      AND mt.booked_on >= :from AND mt.booked_on < :to) AS "l1Booked",
+                  (SELECT count(*) FROM crm.meeting mt JOIN crm.account a ON a.id = mt.account_id
+                    WHERE mt.level = 'L1' AND mt.status = 'COMPLETED' AND (mt.booked_by = u.id OR a.sql_credit_bdr_id = u.id)
+                      AND mt.scheduled_start >= :from AND mt.scheduled_start < :to) AS "l1Done",
+                  (SELECT count(*) FROM crm.meeting mt JOIN crm.account a ON a.id = mt.account_id
+                    WHERE mt.level = 'L2' AND mt.status = 'COMPLETED' AND (mt.booked_by = u.id OR a.sql_credit_bdr_id = u.id)
+                      AND mt.scheduled_start >= :from AND mt.scheduled_start < :to) AS "l2Done",
+                  (SELECT count(*) FROM crm.meeting mt JOIN crm.account a ON a.id = mt.account_id
+                    WHERE mt.level = 'L3' AND mt.status = 'COMPLETED' AND (mt.booked_by = u.id OR a.sql_credit_bdr_id = u.id)
+                      AND mt.scheduled_start >= :from AND mt.scheduled_start < :to) AS "l3Done",
+                  (SELECT count(*) FROM crm.activity act WHERE act.type = 'CALL' AND act.logged_by = u.id
+                      AND act.occurred_at >= :from AND act.occurred_at < :to) AS "calls",
+                  (SELECT round(sum(t.target_value * (least(p.e, :to::date) - greatest(t.period_start, :from::date))::numeric / (p.e - t.period_start)))
+                     FROM crm.target t, LATERAL (SELECT CASE WHEN t.period_type = 'MONTH' THEN (t.period_start + interval '1 month')::date
+                                                             ELSE t.period_start + 7 END AS e) p
+                    WHERE t.user_id = u.id AND t.metric = 'L1_DONE' AND t.period_start < :to AND p.e > :from AND t.period_type IN ('MONTH', 'WEEK')
+                      AND (t.period_type = 'MONTH' OR NOT EXISTS (SELECT 1 FROM crm.target t2 WHERE t2.user_id = u.id AND t2.metric = 'L1_DONE'
+                           AND t2.period_type = 'MONTH' AND t2.period_start = date_trunc('month', t.period_start)::date))) AS "l1DoneTarget",
+                  (SELECT round(sum(t.target_value * (least(p.e, :to::date) - greatest(t.period_start, :from::date))::numeric / (p.e - t.period_start)))
+                     FROM crm.target t, LATERAL (SELECT (t.period_start + interval '1 month')::date AS e) p
+                    WHERE t.user_id = u.id AND t.metric = 'L1_BOOKED' AND t.period_type = 'MONTH'
+                      AND t.period_start < :to AND p.e > :from) AS "l1BookedTarget"
+                  FROM crm.app_user u WHERE u.role = 'BDR' AND u.is_active ORDER BY u.full_name""", params));
+        m.put("aes", jdbc.queryForList("""
+                SELECT u.id AS "userId", u.full_name AS "name",
+                  (SELECT count(*) FROM crm.meeting mt WHERE mt.ae_id = u.id AND mt.level = 'L1' AND mt.status = 'COMPLETED'
+                      AND mt.scheduled_start >= :from AND mt.scheduled_start < :to) AS "l1Done",
+                  (SELECT count(*) FROM crm.meeting mt WHERE mt.ae_id = u.id AND mt.level = 'L2' AND mt.status = 'COMPLETED'
+                      AND mt.scheduled_start >= :from AND mt.scheduled_start < :to) AS "l2Done",
+                  (SELECT count(*) FROM crm.meeting mt WHERE mt.ae_id = u.id AND mt.level = 'L3' AND mt.status = 'COMPLETED'
+                      AND mt.scheduled_start >= :from AND mt.scheduled_start < :to) AS "l3Done",
+                  (SELECT count(*) FROM crm.meeting mt WHERE mt.ae_id = u.id AND mt.status IN ('SCHEDULED','RESCHEDULED')
+                      AND mt.outcome IS NULL AND mt.scheduled_start < now()) AS "outcomesOverdue",
+                  (SELECT count(*) FROM crm.stage_history h JOIN crm.account a ON a.id = h.account_id
+                    WHERE a.ae_owner_id = u.id AND h.to_stage = 'WON' AND h.changed_at >= :from AND h.changed_at < :to) AS "won",
+                  (SELECT count(*) FROM crm.stage_history h JOIN crm.account a ON a.id = h.account_id
+                    WHERE a.ae_owner_id = u.id AND h.to_stage = 'LOST' AND h.changed_at >= :from AND h.changed_at < :to) AS "lost",
+                  (SELECT count(*) FROM crm.account a WHERE a.ae_owner_id = u.id AND a.account_status = 'ACTIVE'
+                      AND a.lifecycle_stage NOT IN ('WON','LOST','IMPLEMENTATION')) AS "openDeals"
+                  FROM crm.app_user u WHERE u.role = 'AE' AND u.is_active ORDER BY u.full_name""", params));
+        return m;
+    }
+
     private static MapSqlParameterSource p(UUID user, LocalDate[] r) {
         return new MapSqlParameterSource().addValue("u", user).addValue("from", r[0]).addValue("to", r[1]);
     }

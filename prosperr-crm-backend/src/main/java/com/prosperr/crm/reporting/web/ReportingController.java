@@ -66,6 +66,15 @@ public class ReportingController {
         return dashboards.ae(self(aeId, Role.AE), dashboards.range(preset, from, to));
     }
 
+    /** Per-BDR and per-AE L1 / L2 / L3 counts and targets for any period (managers and admins). */
+    @GetMapping("/dashboards/scoreboard")
+    @PreAuthorize("hasAnyRole('MANAGER','ADMIN')")
+    public Map<String, Object> scoreboard(@RequestParam(required = false) String preset,
+                                          @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+                                          @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        return dashboards.scoreboard(dashboards.range(preset, from, to));
+    }
+
     @GetMapping("/dashboards/leadership")
     @PreAuthorize("hasAnyRole('MANAGER','ADMIN')")
     public Map<String, Object> leadership(@RequestParam(required = false) String preset,
