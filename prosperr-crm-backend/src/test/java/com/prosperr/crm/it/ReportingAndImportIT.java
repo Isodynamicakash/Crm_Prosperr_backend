@@ -190,4 +190,19 @@ class ReportingAndImportIT extends IntegrationTest {
         for (int i = 0; i <= com.prosperr.crm.importer.application.ImportService.MAX_ROWS; i++) big.append("C").append(i).append(",P\n");
         upload(bdr1, big.toString(), Map.of("Company", "company", "Name", "fullName"), 422);
     }
+
+    @Test
+    void PublicStats_needNoLogin_andNeverExposeNames() throws Exception {
+        var q = qualifiedAccount("Secretive Co", 600, ae1);
+        logCall(bdr1, q.get("stakeholder"), Map.of("outcomeCode", "DID_NOT_PICK"));
+        var res = mvc.perform(MockMvcRequestBuilders.get("/public/stats")).andReturn();
+        assertEquals(200, res.getResponse().getStatus());
+        String body = res.getResponse().getContentAsString();
+        JsonNode j = json.readTree(body);
+        assertTrue(j.path("kpis").path("calls").asLong() >= 2);
+        assertTrue(j.path("kpis").has("meetings") && j.path("kpis").has("sqls"));   // booking time uses the DB clock, the test clock runs a day ahead
+        assertTrue(j.path("recent").size() > 0);
+        assertFalse(body.contains("Secretive"), "no company names on a public page");
+        assertFalse(body.contains("Rita"), "no people on a public page");
+    }
 }
