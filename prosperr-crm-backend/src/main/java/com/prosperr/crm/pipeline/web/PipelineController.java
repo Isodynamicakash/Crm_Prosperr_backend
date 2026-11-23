@@ -50,6 +50,14 @@ public class PipelineController {
         return meetings.overdueOutcomes(who);
     }
 
+    /** Today's and upcoming meetings scheduled for the signed-in AE. */
+    @GetMapping("/meetings/schedule")
+    public List<Map<String, Object>> schedule() {
+        var actor = current.get();
+        if (actor.role() != Role.AE) throw new com.prosperr.crm.shared.web.ForbiddenException("Only AEs can view this meeting schedule");
+        return meetings.schedule(actor.userId());
+    }
+
     @GetMapping("/opportunities/{id}")
     public Map<String, Object> opportunity(@PathVariable UUID id) { return opportunities.get(id, current.get()); }
 
