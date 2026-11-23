@@ -58,9 +58,104 @@ public class ImportService {
         this.rowTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
+    /** Header name (lower-case, letters and digits only) -> CRM field. Covers Apollo exports and the team's own sheets. */
+    static final Map<String, String> SYNONYMS = new LinkedHashMap<>();
+    static {
+        String[][] table = {
+            {"company", "company", "companyname", "accountname", "account", "organization", "organisation", "organizationname", "employer", "firm", "client"},
+            {"website", "website", "companywebsite", "websiteurl", "companyurl", "domain", "companydomain", "url", "web"},
+            {"city", "city", "location", "companycity", "hqcity", "headquarters", "indiahq", "hq", "personcity", "town"},
+            {"employeeCount", "employees", "employeecount", "noofemployees", "numberofemployees", "headcount", "estimatedemployees",
+                    "estimatedindiaemployees", "linkedinemployees", "companysize", "teamsize", "staff"},
+            {"licensePotential", "licenses", "licences", "license", "licence", "licensepotential", "licencepotential", "seats", "licensecount"},
+            {"industry", "industry", "sector", "vertical", "subindustry", "companyindustry"},
+            {"leadSource", "leadsource", "source", "leadorigin", "channel"},
+            {"apolloId", "apolloaccountid", "apolloid", "accountid"},
+            {"firstName", "firstname", "fname", "givenname"},
+            {"lastName", "lastname", "lname", "surname", "familyname"},
+            {"fullName", "name", "fullname", "contactname", "contact", "pocname", "poc", "person", "personname", "stakeholder",
+                    "stakeholdername", "decisionmaker", "prospect", "prospectname", "lead", "leadname"},
+            {"designation", "title", "designation", "jobtitle", "role", "position", "persontitle", "pocdesignation"},
+            {"department", "department", "dept", "function", "departments"},
+            {"email", "email", "emailaddress", "workemail", "businessemail", "email1", "emailid", "mail", "contactemail", "officialemail", "pocemail"},
+            {"email2", "email2", "secondaryemail", "personalemail", "alternateemail", "otheremail"},
+            {"phone", "phone", "mobile", "mobilephone", "mobilenumber", "mobileno", "phonenumber", "phoneno", "contactnumber", "contactno",
+                    "number", "workdirectphone", "directphone", "cell", "cellphone", "whatsapp", "pocphone", "pocnumber"},
+            {"phone2", "phone2", "corporatephone", "companyphone", "otherphone", "homephone", "alternatephone", "landline", "officephone"},
+            {"linkedin", "linkedin", "linkedinurl", "personlinkedinurl", "linkedinprofile", "linkedinprofileurl", "linkedinlink", "profileurl", "linkedinid"},
+            {"bdrEmail", "bdremail", "owneremail", "assignedtoemail", "contactowneremail", "sdremail"},
+            {"remarks", "remarks", "remark", "notes", "note", "comments", "comment", "update", "status", "feedback", "summary"},
+        };
+        for (String[] row : table) for (int i = 1; i < row.length; i++) SYNONYMS.putIfAbsent(row[i], row[0]);
+    }
+
+    static String key(String header) { return header == null ? "" : header.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]", ""); }
+
+    /** Best guess of file column -> field, each field used at most once (first matching column wins). */
+    static Map<String, String> suggest(List<String> headers) {
+        Map<String, String> out = new LinkedHashMap<>();
+        Set<String> used = new HashSet<>();
+        for (String h : headers) {                                   // exact synonyms first
+            String f = SYNONYMS.get(key(h));
+            if (f != null && used.add(f)) out.put(h, f);
+        }
+        for (String h : headers) {                                   // then "contains" (e.g. "Company Name for Emails", "POC Mobile No.")
+            if (out.containsKey(h)) continue;
+            String k = key(h);
+            if (k.matches(".*(status|verified|confidence|count|score|date|catchall).*") && !k.contains("employee")) continue;  // metadata about a field, not the field
+            String f = k.contains("linkedin") ? "linkedin"
+                    : k.contains("company") || k.contains("account") ? "company"
+                    : k.contains("email") ? (used.contains("email") ? "email2" : "email")
+                    : k.contains("phone") || k.contains("mobile") ? (used.contains("phone") ? "phone2" : "phone")
+                    : k.contains("designation") || k.endsWith("title") ? "designation"
+                    : k.contains("employee") ? "employeeCount" : k.contains("licen") ? "licensePotential" : k.contains("industry") ? "industry"
+                    : k.contains("city") || k.contains("location") ? "city" : k.contains("website") || k.contains("domain") ? "website"
+                    : k.contains("remark") || k.contains("note") || k.contains("comment") ? "remarks" : null;
+            if (f != null && used.add(f)) out.put(h, f);
+        }
+        if (out.containsValue("firstName") && out.containsValue("fullName") && !out.containsValue("lastName")) {
+            out.values().remove("firstName");                         // a single "Name" column is safer than a lone first name
+        }
+        return out;
+    }
+
+    /** Step 1 of the import wizard: sheets, header row, a few sample rows and suggested column matches. Nothing is saved. */
+    public Map<String, Object> inspect(String fileName, byte[] bytes, String sheet) throws IOException {
+        RowReader reader = readers.stream().filter(r -> r.supports(fileName)).findFirst()
+                .orElseThrow(() -> new DomainException("FILE_TYPE", "Upload a .csv or .xlsx file (in Excel: File > Save As > .xlsx or CSV UTF-8)"));
+        List<String> sheets;
+        List<Map<String, String>> rows;
+        try {
+            sheets = reader.sheets(new java.io.ByteArrayInputStream(bytes));
+            String pick = sheet != null && sheets.contains(sheet) ? sheet : sheets.isEmpty() ? null : sheets.get(0);
+            rows = reader.read(new java.io.ByteArrayInputStream(bytes), pick);
+            sheet = pick;
+        } catch (RuntimeException e) {
+            throw new DomainException("FILE_UNREADABLE", "This file couldn't be read. Save it again as .xlsx or CSV (UTF-8) and retry.");
+        }
+        rows.removeIf(r -> r.values().stream().allMatch(v -> v == null || v.isBlank()));
+        List<String> headers = rows.isEmpty() ? List.of() : new ArrayList<>(rows.get(0).keySet());
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("sheets", sheets);
+        out.put("sheet", sheet);
+        out.put("headers", headers);
+        out.put("rows", rows.size());
+        out.put("sample", rows.stream().limit(5).toList());
+        out.put("suggested", suggest(headers));
+        out.put("maxRows", MAX_ROWS);
+        return out;
+    }
+
     @Transactional
     public Map<String, Object> upload(String fileName, InputStream in, String source, Map<String, String> mapping, Actor actor)
             throws IOException {
+        return upload(fileName, in, source, mapping, null, null, actor);
+    }
+
+    /** sheet: which Excel sheet; ownerBdrId: BDR who gets rows that have no owner column (managers importing for a BDR). */
+    @Transactional
+    public Map<String, Object> upload(String fileName, InputStream in, String source, Map<String, String> mapping, String sheet,
+                                      UUID ownerBdrId, Actor actor) throws IOException {
         if (actor.role() == Role.AE) throw new DomainException("FORBIDDEN_IMPORT", "AEs cannot import prospects");
         for (String f : mapping.values()) if (!FIELDS.contains(f)) throw new DomainException("UNKNOWN_FIELD", "Unknown field " + f);
         RowReader reader = readers.stream().filter(r -> r.supports(fileName)).findFirst()
@@ -69,7 +164,15 @@ public class ImportService {
         if (!mapping.containsValue("fullName") && !mapping.containsValue("firstName"))
             throw new DomainException("MAPPING_INCOMPLETE", "Map a column to the person's name (full name or first name)");
         List<Map<String, String>> raw;
-        try { raw = new ArrayList<>(reader.read(in)); }
+        String ownerEmail = null;
+        if (ownerBdrId != null) {
+            if (!actor.isLeadership() && !ownerBdrId.equals(actor.userId()))
+                throw new DomainException("FORBIDDEN_IMPORT", "Only a manager can import leads for another BDR");
+            var u = users.get(ownerBdrId);
+            if (u == null || u.role() != Role.BDR || !u.active()) throw new DomainException("BAD_OWNER", "Pick an active BDR as the owner");
+            ownerEmail = u.email();
+        }
+        try { raw = new ArrayList<>(reader.read(in, sheet)); }
         catch (RuntimeException | IOException e) {
             throw new DomainException("FILE_UNREADABLE", "This file couldn't be read. Save it again as .csv (UTF-8) or .xlsx and retry.");
         }
@@ -84,10 +187,17 @@ public class ImportService {
                         .addValue("m", json.writeValueAsString(mapping)).addValue("n", raw.size()).addValue("by", actor.userId()), UUID.class);
         int i = 1;
         Map<String, Integer> seen = new HashMap<>();   // same person twice in one file
+        Map<String, Integer> companies = new HashMap<>();   // first row of each new company in this file
         for (Map<String, String> r : raw) {
             Map<String, String> mapped = map(r, mapping);
+            if (ownerEmail != null) mapped.putIfAbsent("bdrEmail", ownerEmail);
+            if ("APOLLO".equalsIgnoreCase(source)) mapped.putIfAbsent("leadSource", "APOLLO");
             Preview pv = withinFile(mapped, i, seen);
             if (pv == null) pv = preview(mapped);
+            if ("CREATED".equals(pv.result()) && mapped.get("company") != null) {
+                Integer first = companies.putIfAbsent(Normalizer.companyName(mapped.get("company")), i);
+                if (first != null) pv = new Preview("MERGED", null, null, "Joins the new company from row " + first + pv.message().substring("New company".length()));
+            }
             jdbc.update("""
                     INSERT INTO crm.import_row (import_job_id, row_no, raw, result, matched_account_id, matched_stakeholder_id, message)
                     VALUES (:j, :n, CAST(:raw AS jsonb), :res, :acc, :st, :msg)""",
@@ -285,7 +395,7 @@ public class ImportService {
     public List<Map<String, Object>> rows(UUID jobId) {
         return jdbc.queryForList("""
                 SELECT r.row_no AS "row", r.result, r.message, r.raw->>'company' AS "company",
-                       coalesce(r.raw->>'fullName', r.raw->>'firstName') AS "person", r.raw->>'email' AS "email",
+                       coalesce(r.raw->>'fullName', trim(coalesce(r.raw->>'firstName', '') || ' ' || coalesce(r.raw->>'lastName', ''))) AS "person", r.raw->>'email' AS "email",
                        a.name AS "matchedAccount", s.first_name || coalesce(' ' || s.last_name, '') AS "matchedStakeholder"
                   FROM crm.import_row r LEFT JOIN crm.account a ON a.id = r.matched_account_id
                   LEFT JOIN crm.stakeholder s ON s.id = r.matched_stakeholder_id

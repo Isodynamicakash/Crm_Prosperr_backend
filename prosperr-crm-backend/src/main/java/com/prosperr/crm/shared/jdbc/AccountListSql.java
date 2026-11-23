@@ -11,7 +11,11 @@ public final class AccountListSql {
                      FROM crm.account_bdr ab JOIN crm.app_user u ON u.id = ab.bdr_id WHERE ab.account_id = a.id) AS "bdrs",
                    o.temperature, o.expected_mrr AS "expectedMrr", a.next_step AS "nextStep", a.next_step_due AS "nextStepDue",
                    a.last_activity_at AS "lastActivityAt", ir.label AS "inactiveReason", a.revisit_on AS "revisitOn",
-                   a.review_flagged_at IS NOT NULL AS "flaggedForReview", a.created_at AS "createdAt"
+                   a.review_flagged_at IS NOT NULL AS "flaggedForReview", a.created_at AS "createdAt",
+                   (SELECT max(x.occurred_at) FROM crm.activity x WHERE x.account_id = a.id AND x.logged_by = :viewer) AS "myLastTouchAt",
+                   (SELECT count(*) FROM crm.activity x WHERE x.account_id = a.id AND x.logged_by = :viewer AND x.type = 'CALL') AS "myCalls",
+                   (SELECT string_agg(DISTINCT u.full_name, ', ') FROM crm.activity x JOIN crm.app_user u ON u.id = x.logged_by
+                     WHERE x.account_id = a.id AND u.role = 'BDR' AND x.logged_by <> :viewer) AS "workedByOthers"
               FROM crm.account a
               LEFT JOIN crm.city c ON c.id = a.city_id
               LEFT JOIN crm.app_user ae ON ae.id = a.ae_owner_id

@@ -11,19 +11,25 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 
+/** CSV (UTF-8, Excel's BOM tolerated). The first non-empty line is the header; columns are read by position. */
 @Component
 class CsvRowReader implements RowReader {
     public boolean supports(String fileName) { return fileName != null && fileName.toLowerCase().endsWith(".csv"); }
 
-    public List<Map<String, String>> read(InputStream in) throws IOException {
-        CSVFormat fmt = CSVFormat.DEFAULT.builder().setHeader().setSkipHeaderRecord(true).setIgnoreEmptyLines(true)
-                .setTrim(true).build();
+    public List<Map<String, String>> read(InputStream in, String sheet) throws IOException {
+        CSVFormat fmt = CSVFormat.DEFAULT.builder().setIgnoreEmptyLines(true).setTrim(true).build();
         List<Map<String, String>> rows = new ArrayList<>();
         try (CSVParser p = CSVParser.parse(new InputStreamReader(in, StandardCharsets.UTF_8), fmt)) {
-            List<String> headers = p.getHeaderNames();
+            List<String> headers = null;
             for (CSVRecord r : p) {
+                if (headers == null) {
+                    List<String> raw = new ArrayList<>();
+                    r.forEach(raw::add);
+                    headers = RowReader.cleanHeaders(raw);         // strips the BOM, names blank columns, numbers repeats
+                    continue;
+                }
                 Map<String, String> row = new LinkedHashMap<>();
-                for (String h : headers) row.put(h.replace("\uFEFF", "").trim(), r.isMapped(h) ? r.get(h) : null);   // Excel adds a BOM
+                for (int i = 0; i < headers.size(); i++) row.put(headers.get(i), i < r.size() ? r.get(i) : null);
                 rows.add(row);
             }
         }

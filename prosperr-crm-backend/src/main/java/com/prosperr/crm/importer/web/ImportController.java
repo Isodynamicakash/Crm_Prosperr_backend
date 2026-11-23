@@ -27,9 +27,20 @@ public class ImportController {
     /** mapping: JSON object of file column -> field, e.g. {"Company":"company","Name":"fullName","Mobile":"phone"}. */
     @PostMapping(consumes = "multipart/form-data")
     public Map<String, Object> upload(@RequestPart("file") MultipartFile file, @RequestParam("mapping") String mapping,
-                                      @RequestParam(value = "source", required = false) String source) throws IOException {
+                                      @RequestParam(value = "source", required = false) String source,
+                                      @RequestParam(value = "sheet", required = false) String sheet,
+                                      @RequestParam(value = "ownerBdrId", required = false) UUID ownerBdrId) throws IOException {
         Map<String, String> m = json.readValue(mapping, new TypeReference<Map<String, String>>() {});
-        return imports.upload(file.getOriginalFilename(), file.getInputStream(), source, m, current.get());
+        return imports.upload(file.getOriginalFilename(), file.getInputStream(), source, m, sheet, ownerBdrId, current.get());
+    }
+
+    /** Wizard step 1: read the file, list its sheets and suggest which column is which field. Saves nothing. */
+    @PostMapping(value = "/inspect", consumes = "multipart/form-data")
+    public Map<String, Object> inspect(@RequestPart("file") MultipartFile file,
+                                       @RequestParam(value = "sheet", required = false) String sheet) throws IOException {
+        if (current.get().role() == com.prosperr.crm.shared.domain.Role.AE)
+            throw new com.prosperr.crm.shared.domain.DomainException("FORBIDDEN_IMPORT", "AEs cannot import prospects");
+        return imports.inspect(file.getOriginalFilename(), file.getBytes(), sheet);
     }
 
     @GetMapping("/fields")

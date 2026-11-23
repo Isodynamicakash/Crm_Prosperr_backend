@@ -49,6 +49,7 @@ public class AccountQueryService {
             case "name" -> "a.name";
             case "lastActivity" -> "a.last_activity_at NULLS FIRST";
             case "nextStepDue" -> "a.next_step_due NULLS FIRST";
+            case "myLastTouch" -> "(SELECT max(x.occurred_at) FROM crm.activity x WHERE x.account_id = a.id AND x.logged_by = :viewer) DESC NULLS LAST";
             default -> "a.created_at DESC";
         };
         p.addValue("limit", size).addValue("offset", (long) page * size);
@@ -87,6 +88,14 @@ public class AccountQueryService {
         accounts.require(viewer, Action.VIEW_PIPELINE, accountId);
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("account", accounts.get(accountId));
+        // who has already worked this company, so two BDRs don't call the same people blind
+        out.put("workedBy", jdbc.queryForList("""
+                SELECT u.id AS "userId", u.full_name AS "name", u.role AS "role", u.id = :me AS "me",
+                       count(*) FILTER (WHERE x.type = 'CALL') AS "calls", count(*) AS "touches", max(x.occurred_at) AS "lastAt"
+                  FROM crm.activity x JOIN crm.app_user u ON u.id = x.logged_by
+                 WHERE x.account_id = :a AND u.role IN ('BDR', 'AE')
+                 GROUP BY u.id, u.full_name, u.role ORDER BY max(x.occurred_at) DESC""",
+                new MapSqlParameterSource().addValue("a", accountId).addValue("me", viewer.userId())));
         out.put("owners", jdbc.queryForList("""
                 SELECT 'AE' AS "role", u.id, u.full_name AS "name" FROM crm.account a JOIN crm.app_user u ON u.id = a.ae_owner_id WHERE a.id = :a
                 UNION ALL

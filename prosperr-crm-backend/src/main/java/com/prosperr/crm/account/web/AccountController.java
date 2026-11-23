@@ -49,6 +49,7 @@ public class AccountController {
                                   @RequestParam(required = false) String zone,
                                   @RequestParam(required = false) UUID aeId,
                                   @RequestParam(required = false) UUID bdrId,
+                                  @RequestParam(required = false) Boolean workedByMe,
                                   @RequestParam(required = false) UUID cityId,
                                   @RequestParam(required = false) String sizeBucket,
                                   @RequestParam(required = false) UUID industryId,
@@ -61,7 +62,7 @@ public class AccountController {
                                   @RequestParam(required = false) String sort,
                                   @RequestParam(required = false) String format) {
         AccountFilter f = new AccountFilter(q, status, stage, zone, aeId, bdrId, cityId, sizeBucket, industryId, temperature,
-                flagged, from, to);
+                flagged, from, to, Boolean.TRUE.equals(workedByMe) ? current.get().userId() : null);
         if (format != null && !format.equalsIgnoreCase("json")) {
             return TableExport.respond(queries.list(f, current.get(), 0, 100_000, sort).items(), format, "accounts");
         }

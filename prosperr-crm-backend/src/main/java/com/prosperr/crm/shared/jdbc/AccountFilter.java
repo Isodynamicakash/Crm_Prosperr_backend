@@ -14,7 +14,13 @@ import java.util.UUID;
  */
 public record AccountFilter(String q, String status, List<String> stages, String zone, UUID aeId, UUID bdrId,
                             UUID cityId, String sizeBucket, UUID industryId, String temperature, Boolean flagged,
-                            LocalDate from, LocalDate to) {
+                            LocalDate from, LocalDate to, UUID workedBy) {
+
+    /** Without the "worked by" filter (dashboards, reports). */
+    public AccountFilter(String q, String status, List<String> stages, String zone, UUID aeId, UUID bdrId, UUID cityId,
+                         String sizeBucket, UUID industryId, String temperature, Boolean flagged, LocalDate from, LocalDate to) {
+        this(q, status, stages, zone, aeId, bdrId, cityId, sizeBucket, industryId, temperature, flagged, from, to, null);
+    }
 
     public static AccountFilter none() { return new AccountFilter(null, "ALL", null, null, null, null, null, null, null, null, null, null, null); }
 
@@ -32,6 +38,12 @@ public record AccountFilter(String q, String status, List<String> stages, String
         if (bdrId != null) {
             w.append(" AND EXISTS (SELECT 1 FROM crm.account_bdr fb WHERE fb.account_id = a.id AND fb.bdr_id = :bdr)");
             p.addValue("bdr", bdrId);
+        }
+        if (workedBy != null) {   // accounts this person has called, emailed, noted, booked or submitted
+            w.append(" AND (EXISTS (SELECT 1 FROM crm.activity wa WHERE wa.account_id = a.id AND wa.logged_by = :worked)")
+             .append(" OR EXISTS (SELECT 1 FROM crm.meeting wm WHERE wm.account_id = a.id AND wm.booked_by = :worked)")
+             .append(" OR EXISTS (SELECT 1 FROM crm.sql_submission ws WHERE ws.account_id = a.id AND ws.submitted_by = :worked))");
+            p.addValue("worked", workedBy);
         }
         if (cityId != null) { w.append(" AND a.city_id = :city"); p.addValue("city", cityId); }
         if (sizeBucket != null) { w.append(" AND a.size_bucket_code = :bucket"); p.addValue("bucket", sizeBucket); }
