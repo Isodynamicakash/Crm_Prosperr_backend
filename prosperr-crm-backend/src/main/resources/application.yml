@@ -1,6 +1,9 @@
 spring:
   application:
     name: prosperr-crm
+  # Local secrets (SARVAM_API_KEY, ...) can live in a git-ignored .env next to pom.xml.
+  config:
+    import: optional:file:.env[.properties]
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/postgres?currentSchema=crm}
     username: ${DB_USERNAME:postgres}
@@ -48,6 +51,11 @@ crm:
     enabled: ${JOBS_ENABLED:true}
   mail:
     provider: ${MAIL_PROVIDER:log}
+  ai:
+    sarvam-api-key: ${SARVAM_API_KEY:}
+    sarvam-base-url: ${SARVAM_BASE_URL:https://api.sarvam.ai}
+    stt-model: ${SARVAM_STT_MODEL:saarika:v2.5}
+    chat-model: ${SARVAM_CHAT_MODEL:sarvam-105b}
 
 springdoc:
   swagger-ui:
