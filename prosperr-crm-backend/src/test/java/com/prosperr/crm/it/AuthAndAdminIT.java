@@ -88,4 +88,14 @@ class AuthAndAdminIT extends IntegrationTest {
         patch("/api/admin/users/" + bdr1, admin, Map.of("role", "AE"));                         // role change: old token stops
         call(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/my-day"), bdr1, null, 401);
     }
+
+    @Test
+    void Login_withPersonalGmailOnlyOnceLinkedViaConnectGoogle() throws Exception {
+        when(google.verify("personal")).thenReturn(new GoogleTokenVerifier.GoogleIdentity("g-9", "jasim.personal@gmail.com", true, null));
+        post("/api/auth/google", null, Map.of("idToken", "personal"), 403);            // not linked yet
+        db.update("INSERT INTO crm.user_mailbox (user_id, gmail_address, status) VALUES (?, 'jasim.personal@gmail.com', 'CONNECTED')", bdr1);
+        assertEquals(bdr1.toString(), post("/api/auth/google", null, Map.of("idToken", "personal")).path("user").path("id").asText());
+        post("/api/admin/users/" + bdr1 + "/deactivate", admin, null);
+        post("/api/auth/google", null, Map.of("idToken", "personal"), 403);            // deactivated stays out
+    }
 }

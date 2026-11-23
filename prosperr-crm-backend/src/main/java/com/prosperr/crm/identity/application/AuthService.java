@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Locale;
+import java.util.Optional;
 
 /**
  * Sign-in rules: the Google account must be verified, on the company domain, and already created by an admin
@@ -32,9 +33,15 @@ public class AuthService {
         GoogleTokenVerifier.GoogleIdentity id = google.verify(idToken);
         if (!id.emailVerified() || id.email() == null) throw new ForbiddenException("Google email is not verified");
         String email = id.email().toLowerCase(Locale.ROOT);
+        // A user may sign in with the Google account they linked via "Connect Google" (often a personal Gmail).
+        // Linking needs an existing CRM session, so this never lets in someone the admin didn't create.
+        Optional<AppUser> linked = jdbc.query("""
+                SELECT user_id FROM crm.user_mailbox WHERE lower(gmail_address) = ? AND status IN ('CONNECTED','EXPIRED')""",
+                (rs, i) -> rs.getObject(1, java.util.UUID.class), email).stream().findFirst().flatMap(users::findById);
+        if (linked.isPresent()) return complete(linked.get(), null);
         String domain = allowedDomain();
         if (domain != null && !email.endsWith("@" + domain)) {
-            throw new ForbiddenException("Use your @" + domain + " Google account");
+            throw new ForbiddenException("Use your @" + domain + " Google account, or first link this Google account from the CRM (Connect Google)");
         }
         AppUser u = users.findByEmailIgnoreCase(email)
                 .orElseThrow(() -> new ForbiddenException("No CRM access for " + email + ". Ask your admin for access."));
