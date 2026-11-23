@@ -126,7 +126,9 @@ public class MeetingService implements PipelineApi {
     @Override
     @Transactional
     public void cancelOpenMeetings(UUID accountId) {
-        jdbc.update("UPDATE crm.meeting SET status = 'CANCELLED' WHERE account_id = :a AND status = 'SCHEDULED'", Map.of("a", accountId));
+        List<UUID> ids = jdbc.queryForList("UPDATE crm.meeting SET status = 'CANCELLED' WHERE account_id = :a AND status = 'SCHEDULED' RETURNING id",
+                Map.of("a", accountId), UUID.class);
+        if (!ids.isEmpty()) events.publishEvent(new com.prosperr.crm.pipeline.api.MeetingsCancelled(accountId, ids));
     }
 
     @Override

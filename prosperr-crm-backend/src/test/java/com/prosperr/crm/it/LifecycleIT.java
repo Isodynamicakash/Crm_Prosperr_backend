@@ -100,4 +100,12 @@ class LifecycleIT extends IntegrationTest {
         assertEquals("INACTIVE", post("/api/accounts/" + q.get("account") + "/inactive", manager,
                 Map.of("reasonId", pick("INACTIVE_REASON", "BUDGET"), "remark", "No budget")).path("status").asText());
     }
+
+    @Test
+    void Inactive_cancelsUpcomingMeetings() throws Exception {
+        var q = qualifiedAccount("Parked Co", 600, ae1);
+        post("/api/accounts/" + q.get("account") + "/inactive", ae1, Map.of("reasonId", pick("INACTIVE_REASON", "SPOC_UNRESPONSIVE"),
+                "remark", "No response", "revisitOn", today().plusDays(30).toString()));
+        assertEquals("CANCELLED", db.queryForObject("SELECT status FROM crm.meeting WHERE id = ?", String.class, q.get("meeting")));
+    }
 }

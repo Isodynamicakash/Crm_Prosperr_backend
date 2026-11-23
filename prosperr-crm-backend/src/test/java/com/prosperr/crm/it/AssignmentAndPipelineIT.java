@@ -134,6 +134,8 @@ class AssignmentAndPipelineIT extends IntegrationTest {
         post("/api/opportunities/" + opp + "/stage", ae1, Map.of("target", "LOST", "lostReasonId", pick("LOST_REASON", "PRICING")));
         assertEquals("LOST", stage(q.get("account")));
         assertEquals(1, db.queryForObject("SELECT count(*) FROM crm.audit_log WHERE entity_id = ? AND field_name = 'stage'", Integer.class, opp));
+        assertEquals("CANCELLED", db.queryForObject("SELECT status FROM crm.meeting WHERE id = ?", String.class, q.get("meeting")),
+                "a lost deal's upcoming meeting is cancelled");
     }
 
     @Test

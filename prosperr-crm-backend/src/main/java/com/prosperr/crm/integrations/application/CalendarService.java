@@ -3,6 +3,7 @@ package com.prosperr.crm.integrations.application;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.prosperr.crm.assignment.api.AccountAssigned;
 import com.prosperr.crm.pipeline.api.MeetingBooked;
+import com.prosperr.crm.pipeline.api.MeetingsCancelled;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
@@ -45,6 +46,26 @@ public class CalendarService {
         worker.submit(() -> safely(() -> addAeToOpenEvents(e.accountId()), "add AE to events of " + e.accountId()));
     }
 
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onCancelled(MeetingsCancelled e) {
+        if (!google.available()) return;
+        worker.submit(() -> safely(() -> { for (UUID id : e.meetingIds()) cancel(id); }, "cancel events of " + e.accountId()));
+    }
+
+    /** Removes the Google event (attendees get a cancellation) when the CRM cancels the meeting. */
+    void cancel(UUID meetingId) throws Exception {
+        Row m = row(meetingId).orElse(null);
+        if (m == null || m.eventId() == null || m.ownerId() == null) return;
+        Optional<String> tok = google.accessToken(m.ownerId());
+        if (tok.isEmpty()) return;
+        try {
+            google.call("DELETE", API + "/calendars/primary/events/" + m.eventId() + "?sendUpdates=all", tok.get(), null);
+        } catch (GoogleAccountService.GoogleError ge) {
+            if (ge.status != 404 && ge.status != 410) throw ge;   // already gone
+        }
+        jdbc.update("UPDATE crm.meeting SET calendar_event_id = NULL WHERE id = :id", Map.of("id", meetingId));
+    }
+
     record Row(UUID id, UUID accountId, String accountName, String level, Instant start, Instant end, String link, UUID bookedBy,
                UUID aeId, String eventId, UUID ownerId, UUID rescheduledFrom) {}
 
@@ -72,7 +93,7 @@ public class CalendarService {
                 if (tok.isPresent()) {
                     google.call("PATCH", API + "/calendars/primary/events/" + old.eventId() + "?sendUpdates=all", tok.get(),
                             Map.of("start", time(m.start()), "end", time(end)));
-                    save(m.id(), old.eventId(), old.ownerId(), null);
+                    save(m.id(), old.eventId(), old.ownerId(), old.link());   // the Meet link moves with the event
                     jdbc.update("UPDATE crm.meeting SET calendar_event_id = NULL WHERE id = :id", Map.of("id", old.id()));
                     return;
                 }

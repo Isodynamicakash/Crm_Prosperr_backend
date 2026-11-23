@@ -106,6 +106,7 @@ public class LifecycleService {
         }
         accounts.markInactive(accountId, m.reasonId(), m.remark(), reason.requiresRevisitDate() ? m.revisitOn() : m.revisitOn(),
                 Instant.now(clock));
+        pipeline.cancelOpenMeetings(accountId);   // no one should turn up to a meeting for a parked account
         statusHistory(accountId, AccountStatus.ACTIVE, AccountStatus.INACTIVE, a.stage(), m.reasonId(), m.remark(), m.revisitOn(),
                 null, actor.isLeadership() ? actor.userId() : null, actor.userId());
         audit.record("account", accountId, AuditApi.Action.STATUS, "account_status", "ACTIVE", "INACTIVE", actor.userId());

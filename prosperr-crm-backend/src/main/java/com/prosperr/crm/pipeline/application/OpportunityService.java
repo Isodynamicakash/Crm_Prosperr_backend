@@ -144,6 +144,13 @@ public class OpportunityService {
                 new MapSqlParameterSource().addValue("lr", m.lostReasonId()).addValue("note", m.note())
                         .addValue("t", m.target().name()).addValue("id", id));
         writeStage(o, m.target(), actor.userId());
+        if (m.target() == LifecycleStage.LOST) {
+            // A lost deal has no upcoming meetings; cancelling them also removes the calendar invites.
+            List<UUID> cancelled = jdbc.queryForList(
+                    "UPDATE crm.meeting SET status = 'CANCELLED' WHERE account_id = :a AND status = 'SCHEDULED' RETURNING id",
+                    Map.of("a", o.accountId()), UUID.class);
+            if (!cancelled.isEmpty()) events.publishEvent(new com.prosperr.crm.pipeline.api.MeetingsCancelled(o.accountId(), cancelled));
+        }
         return load(id);
     }
 
