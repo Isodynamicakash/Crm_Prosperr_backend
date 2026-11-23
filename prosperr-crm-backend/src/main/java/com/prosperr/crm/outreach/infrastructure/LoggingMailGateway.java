@@ -1,6 +1,6 @@
 package com.prosperr.crm.outreach.infrastructure;
 
-import com.prosperr.crm.outreach.application.MailGateway;
+import com.prosperr.crm.outreach.api.MailGateway;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;

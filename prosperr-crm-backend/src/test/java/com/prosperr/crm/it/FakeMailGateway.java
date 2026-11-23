@@ -1,6 +1,6 @@
 package com.prosperr.crm.it;
 
-import com.prosperr.crm.outreach.application.MailGateway;
+import com.prosperr.crm.outreach.api.MailGateway;
 
 import java.util.*;
 

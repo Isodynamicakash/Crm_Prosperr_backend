@@ -1,4 +1,4 @@
-package com.prosperr.crm.outreach.application;
+package com.prosperr.crm.outreach.api;
 
 import java.util.UUID;
 

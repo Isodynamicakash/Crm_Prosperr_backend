@@ -4,3 +4,5 @@ crm:
     dev-login-enabled: true
   jobs:
     enabled: false
+  mail:
+    provider: log

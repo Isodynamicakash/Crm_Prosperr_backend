@@ -4,6 +4,7 @@ import com.prosperr.crm.account.api.*;
 import com.prosperr.crm.config.api.ConfigApi;
 import com.prosperr.crm.identity.api.UserDirectory;
 import com.prosperr.crm.identity.api.UserView;
+import com.prosperr.crm.outreach.api.MailGateway;
 import com.prosperr.crm.outreach.api.OutreachEvents;
 import com.prosperr.crm.outreach.domain.MergeContext;
 import com.prosperr.crm.outreach.domain.SendWindow;
@@ -361,6 +362,53 @@ public class SequenceService {
                 .stream().findFirst().orElseThrow(() -> new DomainException("NO_VALID_EMAIL", "Email is no longer valid"));
     }
 
+    // ------------------------------------------------------------------ preview (what the person will receive, and when)
+
+    /** Every step of the sequence rendered for this stakeholder, with the planned send time; nothing is sent. */
+    public Map<String, Object> preview(UUID stakeholderId, UUID sequenceId, Actor actor) {
+        StakeholderView s = stakeholders.get(stakeholderId);
+        AccountView a = accounts.get(s.accountId());
+        guard.require(actor, a.zone() == Zone.PROSPECTING ? Action.WORK_PROSPECT : Action.LOG_ACTIVITY, s.accountId());
+        UUID seq = sequenceId != null ? sequenceId : jdbc.queryForObject(
+                "SELECT id FROM crm.email_sequence WHERE is_default AND is_active", Map.of(), UUID.class);
+        UserView owner = users.get(actor.userId());
+        MergeContext ctx = new MergeContext(s.firstName(), a.name(), s.designation(), owner.firstName(), owner.fullName(),
+                owner.phone(), config.text("product_link", null), props.app().frontendUrl() + "/stakeholders/" + s.id(),
+                "the day it is sent", s.department(), false);
+        SendWindow w = window();
+        Instant start = w.nextOpen(Instant.now(clock));
+        String toEmail = s.primaryEmail().flatMap(e -> jdbc.queryForList("SELECT email FROM crm.stakeholder_email WHERE id = :id AND is_valid",
+                Map.of("id", e.id()), String.class).stream().findFirst()).orElse(null);
+        List<Map<String, Object>> steps = new ArrayList<>();
+        jdbc.query("SELECT step_no, template_id, day_offset, in_same_thread, recipient FROM crm.sequence_step WHERE sequence_id = :s ORDER BY step_no",
+                Map.of("s", seq), rs -> {
+                    TemplateRenderer.Rendered r = templates.render(Db.uuid(rs, "template_id"), ctx);
+                    boolean toBdr = "BDR".equals(rs.getString("recipient"));
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("step", rs.getInt("step_no"));
+                    m.put("dayOffset", rs.getInt("day_offset"));
+                    m.put("sendAt", w.stepTime(start, rs.getInt("day_offset")));
+                    m.put("sameThread", rs.getBoolean("in_same_thread"));
+                    m.put("toBdr", toBdr);
+                    m.put("to", toBdr ? owner.fullName() + " (reminder to you)" : toEmail);
+                    m.put("subject", r.subject());
+                    m.put("body", r.body());
+                    steps.add(m);
+                });
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("sequenceId", seq);
+        out.put("stakeholder", s.fullName());
+        out.put("account", a.name());
+        out.put("email", toEmail);
+        out.put("doNotContact", s.doNotContact());
+        out.put("mailbox", mailbox(actor.userId()).map(Mailbox::address).orElse(null));
+        out.put("mailboxConnected", mailbox(actor.userId()).map(m -> m.status().equals("CONNECTED")).orElse(false));
+        out.put("running", !jdbc.queryForList("SELECT 1 FROM crm.sequence_enrollment WHERE stakeholder_id = :s AND status IN ('RUNNING','PAUSED')",
+                Map.of("s", stakeholderId)).isEmpty());
+        out.put("steps", steps);
+        return out;
+    }
+
     // ------------------------------------------------------------------ monitor (M3-10) and performance (M3-12)
 
     public Map<String, Object> monitor(UUID ownerId) {
@@ -381,6 +429,10 @@ public class SequenceService {
                    AND (CAST(:u AS uuid) IS NULL OR m.sender_user_id = :u) ORDER BY m.created_at DESC""", p));
         out.put("enrollments", jdbc.queryForList("""
                 SELECT e.id, st.first_name || coalesce(' ' || st.last_name, '') AS "stakeholder", a.name AS "account", e.status,
+                       st.id AS "stakeholderId", a.id AS "accountId", st.designation,
+                       (SELECT count(*) FROM crm.email_message m WHERE m.enrollment_id = e.id AND m.status = 'SENT') AS "sent",
+                       (SELECT count(*) FROM crm.sequence_step ss WHERE ss.sequence_id = e.sequence_id AND ss.recipient = 'STAKEHOLDER') AS "steps",
+                       e.started_at AS "startedAt",
                        e.current_step_no AS "step", e.last_sent_at AS "lastSentAt", e.next_send_at AS "nextSendAt",
                        e.stop_reason AS "stopReason", e.reply_received_at AS "replyAt"
                   FROM crm.sequence_enrollment e JOIN crm.stakeholder st ON st.id = e.stakeholder_id JOIN crm.account a ON a.id = st.account_id

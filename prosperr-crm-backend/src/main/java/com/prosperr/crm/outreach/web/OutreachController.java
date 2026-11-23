@@ -47,6 +47,12 @@ public class OutreachController {
         return sequences.monitor(actor.role() == Role.BDR ? actor.userId() : ownerId);
     }
 
+    /** The emails this person would get (rendered, with send times) before the BDR starts the sequence. */
+    @GetMapping("/api/stakeholders/{id}/sequence/preview")
+    public Map<String, Object> preview(@PathVariable UUID id, @RequestParam(required = false) UUID sequenceId) {
+        return sequences.preview(id, sequenceId, current.get());
+    }
+
     @GetMapping("/api/stakeholders/{id}/sequence")
     public Map<String, Object> forStakeholder(@PathVariable UUID id) { return sequences.stakeholderSequence(id); }
 
