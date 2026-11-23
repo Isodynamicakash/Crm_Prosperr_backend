@@ -62,8 +62,14 @@ public class GmailMailGateway implements MailGateway {
                 .append("To: ").append(to).append("\r\n")
                 .append("Subject: ").append(encodeHeader(subject)).append("\r\n");
         if (inReplyTo != null) mime.append("In-Reply-To: ").append(inReplyTo).append("\r\nReferences: ").append(inReplyTo).append("\r\n");
-        mime.append("MIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n")
-                .append(Base64.getMimeEncoder().encodeToString(body.getBytes(StandardCharsets.UTF_8)));
+        // plain text plus a clean HTML version (paragraphs, bullet lists, links, quiet footer); mail apps show the best one
+        String boundary = "prosperr-" + UUID.randomUUID();
+        mime.append("MIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary=\"").append(boundary).append("\"\r\n\r\n")
+                .append("--").append(boundary).append("\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n")
+                .append(Base64.getMimeEncoder().encodeToString(body.getBytes(StandardCharsets.UTF_8))).append("\r\n")
+                .append("--").append(boundary).append("\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n")
+                .append(Base64.getMimeEncoder().encodeToString(html(body).getBytes(StandardCharsets.UTF_8))).append("\r\n")
+                .append("--").append(boundary).append("--\r\n");
         Map<String, Object> req = new LinkedHashMap<>();
         req.put("raw", Base64.getUrlEncoder().withoutPadding().encodeToString(mime.toString().getBytes(StandardCharsets.UTF_8)));
         if (m.threadId() != null) req.put("threadId", m.threadId());
@@ -118,6 +124,51 @@ public class GmailMailGateway implements MailGateway {
         } catch (java.io.IOException e) {
             throw new IllegalStateException("Could not reach Gmail: " + e.getMessage());
         }
+    }
+
+    private static final Pattern URL = Pattern.compile("(https?://[^\\s<]+[^\\s<.,;:)])");
+
+    /**
+     * The plain-text email as simple, readable HTML: one paragraph per block, "•" lines as a real list, links clickable,
+     * and anything after the "--" separator (the unsubscribe line) as a small grey footer. No images, no tracking.
+     */
+    static String html(String text) {
+        String main = text, footer = null;
+        int cut = text.indexOf("\n\n--\n");
+        if (cut >= 0) { main = text.substring(0, cut); footer = text.substring(cut + 5).strip(); }
+        StringBuilder b = new StringBuilder("<div style=\"font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;"
+                + "font-size:14.5px;line-height:1.6;color:#1f2421;max-width:600px\">");
+        for (String block : main.strip().split("\n\\s*\n")) {
+            String[] lines = block.split("\n");
+            StringBuilder para = new StringBuilder();
+            StringBuilder list = new StringBuilder();
+            for (String line : lines) {
+                String l = line.strip();
+                if (l.startsWith("•") || l.startsWith("- ")) {
+                    list.append("<li style=\"margin:0 0 6px\">").append(inline(l.substring(1).strip())).append("</li>");
+                } else {
+                    if (list.length() > 0) { para.append(ul(list)); list.setLength(0); }
+                    if (para.length() > 0 && !para.toString().endsWith(">")) para.append("<br>");
+                    para.append(inline(l));
+                }
+            }
+            if (list.length() > 0) para.append(ul(list));
+            b.append("<p style=\"margin:0 0 14px\">").append(para).append("</p>");
+        }
+        if (footer != null) {
+            b.append("<p style=\"margin:22px 0 0;padding-top:12px;border-top:1px solid #e3e7e4;font-size:12px;color:#7a837d\">")
+             .append(inline(footer).replace("\n", "<br>")).append("</p>");
+        }
+        return b.append("</div>").toString();
+    }
+
+    private static String ul(StringBuilder items) {
+        return "</p><ul style=\"margin:4px 0 14px;padding-left:20px\">" + items + "</ul><p style=\"margin:0\">";
+    }
+
+    private static String inline(String s) {
+        String esc = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+        return URL.matcher(esc).replaceAll("<a href=\"$1\" style=\"color:#0E7A35;text-decoration:underline\">$1</a>");
     }
 
     static String header(JsonNode msg, String name) {
