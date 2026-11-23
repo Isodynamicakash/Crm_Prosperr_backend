@@ -26,7 +26,7 @@ class CallNoteServiceTest {
 
     final SarvamClient fake = new SarvamClient(json, new CrmProperties(null, null, null, new CrmProperties.Ai("k", null, null, null))) {
         @Override public String chat(String system, String user) { sentPrompt.set(user); return reply.get(); }
-        @Override public String transcribe(byte[] wav) { return "transcribed"; }
+        @Override public Transcript transcribeWithLanguage(byte[] wav) { return new Transcript("transcribed", "en-IN"); }
     };
 
     final CallNoteService service = new CallNoteService(fake, null, json, clock) {

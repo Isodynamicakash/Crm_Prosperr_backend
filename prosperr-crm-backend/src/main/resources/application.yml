@@ -54,7 +54,7 @@ crm:
   ai:
     sarvam-api-key: ${SARVAM_API_KEY:}
     sarvam-base-url: ${SARVAM_BASE_URL:https://api.sarvam.ai}
-    stt-model: ${SARVAM_STT_MODEL:saarika:v2.5}
+    stt-model: ${SARVAM_STT_MODEL:saaras:v3}
     chat-model: ${SARVAM_CHAT_MODEL:sarvam-105b}
 
 springdoc:

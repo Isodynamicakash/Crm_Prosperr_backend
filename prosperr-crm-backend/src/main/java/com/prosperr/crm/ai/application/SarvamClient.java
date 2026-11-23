@@ -36,11 +36,15 @@ public class SarvamClient {
     public boolean enabled() { return cfg.sarvamApiKey() != null && !cfg.sarvamApiKey().isBlank(); }
 
     private String base() { return cfg.sarvamBaseUrl() == null || cfg.sarvamBaseUrl().isBlank() ? "https://api.sarvam.ai" : cfg.sarvamBaseUrl(); }
-    private String sttModel() { return cfg.sttModel() == null || cfg.sttModel().isBlank() ? "saarika:v2.5" : cfg.sttModel(); }
+    private String sttModel() { return cfg.sttModel() == null || cfg.sttModel().isBlank() ? "saaras:v3" : cfg.sttModel(); }
     private String chatModel() { return cfg.chatModel() == null || cfg.chatModel().isBlank() ? "sarvam-105b" : cfg.chatModel(); }
 
-    /** Transcribes a short WAV clip; Sarvam detects the language (Hindi, English, Hinglish and other Indian languages). */
-    public String transcribe(byte[] wav) {
+    public record Transcript(String text, String language) {}
+
+    /** Transcribes a short WAV clip; Sarvam detects the language (22 Indian languages, English, and mixes of them). */
+    public String transcribe(byte[] wav) { return transcribeWithLanguage(wav).text(); }
+
+    public Transcript transcribeWithLanguage(byte[] wav) {
         String boundary = "----crm" + UUID.randomUUID();
         var body = new ByteArrayOutputStream();
         try {
@@ -56,7 +60,9 @@ public class SarvamClient {
                 .header("api-subscription-key", cfg.sarvamApiKey())
                 .header("Content-Type", "multipart/form-data; boundary=" + boundary)
                 .POST(HttpRequest.BodyPublishers.ofByteArray(body.toByteArray())).build();
-        return send(req).path("transcript").asText("").trim();
+        JsonNode res = send(req);
+        String lang = res.path("language_code").asText(null);
+        return new Transcript(res.path("transcript").asText("").trim(), lang == null || lang.isBlank() ? null : lang);
     }
 
     /** One chat completion at temperature 0; returns the assistant's text. */

@@ -53,19 +53,27 @@ public class CallNoteService {
 
     public boolean enabled() { return sarvam.enabled(); }
 
-    public Suggestion fromAudio(UUID userId, byte[] wav) {
+    void checkAudio(byte[] wav) {
         if (wav == null || wav.length < 1_000) throw new DomainException("AUDIO_EMPTY", "The recording is empty. Hold the mic button and speak.");
         if (wav.length > MAX_AUDIO_BYTES) throw new DomainException("AUDIO_TOO_LONG", "Keep voice notes under 30 seconds.");
         if (!(wav[0] == 'R' && wav[1] == 'I' && wav[2] == 'F' && wav[3] == 'F')) throw new DomainException("AUDIO_FORMAT", "Send the recording as WAV audio.");
+    }
+
+    void checkText(String text) {
+        if (text == null || text.isBlank()) throw new DomainException("NOTE_EMPTY", "Write or say what happened.");
+        if (text.length() > MAX_TEXT_CHARS) throw new DomainException("NOTE_TOO_LONG", "Keep the note under 2,000 characters.");
+    }
+
+    public Suggestion fromAudio(UUID userId, byte[] wav) {
+        checkAudio(wav);
         checkQuota(userId);
-        String transcript = sarvam.transcribe(wav);
+        String transcript = sarvam.transcribeWithLanguage(wav).text();
         if (transcript.isBlank()) throw new DomainException("AUDIO_UNCLEAR", "Couldn't hear anything clearly. Try again a bit closer to the mic.");
         return suggest(transcript);
     }
 
     public Suggestion fromText(UUID userId, String text) {
-        if (text == null || text.isBlank()) throw new DomainException("NOTE_EMPTY", "Write or say what happened on the call.");
-        if (text.length() > MAX_TEXT_CHARS) throw new DomainException("NOTE_TOO_LONG", "Keep the note under 2,000 characters.");
+        checkText(text);
         checkQuota(userId);
         return suggest(text.trim());
     }
@@ -78,7 +86,7 @@ public class CallNoteService {
                 .append(o.requiresDate() ? " (needs followUpDate)" : "").append(o.requiresReason() ? " (needs reason)" : "").append('\n'));
         String system = "You turn a B2B sales rep's short call note into fields for a CRM call log. The note may be in English, "
                 + "Hindi or a mix. Reply with exactly one JSON object and nothing else. Never invent facts that are not in the note.";
-        String user = "Today is " + today + " (" + today.getDayOfWeek().getDisplayName(TextStyle.FULL, Locale.ENGLISH) + ", India).\n"
+        String user = calendar(today)
                 + "Allowed outcome codes:\n" + list
                 + "\nCall note:\n\"\"\"\n" + redact(transcript) + "\n\"\"\"\n\n"
                 + "Return {\"outcomeCode\": one code from the list or null if unclear, "
@@ -121,7 +129,7 @@ public class CallNoteService {
         catch (Exception e) { throw new DomainException("AI_UNAVAILABLE", "The AI reply could not be read. Fill the form by hand."); }
     }
 
-    private void checkQuota(UUID userId) {
+    void checkQuota(UUID userId) {
         Instant now = clock.instant();
         Deque<Instant> q = usage.computeIfAbsent(userId, k -> new ArrayDeque<>());
         synchronized (q) {
@@ -131,10 +139,23 @@ public class CallNoteService {
         }
     }
 
+    /** Today plus the next 14 days with weekday names, so "next Monday" or "Friday" resolve to the right date. */
+    static String calendar(LocalDate today) {
+        var sb = new StringBuilder("Today is " + today + " (" + today.getDayOfWeek().getDisplayName(TextStyle.FULL, Locale.ENGLISH)
+                + ", India). Upcoming days: ");
+        for (int i = 1; i <= 14; i++) {
+            LocalDate d = today.plusDays(i);
+            sb.append(d.getDayOfWeek().getDisplayName(TextStyle.SHORT, Locale.ENGLISH)).append(' ').append(d).append(i < 14 ? ", " : ".\n");
+        }
+        return sb.toString();
+    }
+
     /** Phone numbers and e-mail addresses never go to the AI provider. */
     static String redact(String s) {
         return LONG_NUMBER.matcher(EMAIL.matcher(s).replaceAll("[email]")).replaceAll("[number]");
     }
+
+    static String redactNumbersOnly(String s) { return redact(s); }
 
     private static String text(JsonNode n, String field) {
         JsonNode v = n.get(field);
