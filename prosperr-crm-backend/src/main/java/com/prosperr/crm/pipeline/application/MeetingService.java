@@ -189,7 +189,14 @@ public class MeetingService implements PipelineApi {
                     meetingId, TaskType.RESCHEDULE_MEETING, "Reschedule the " + m.level() + " meeting (no show)",
                     Instant.now(clock), m.bookedBy(), TaskSource.SYSTEM, null, actor.userId()));
         }
-        if (r.nextStep() != null) accounts.setNextStep(m.accountId(), r.nextStep(), r.nextStepDue());
+        if (r.nextStep() != null) {
+            accounts.setNextStep(m.accountId(), r.nextStep(), r.nextStepDue());
+            // Keep the deal card's next step in step with the account's, so the AE never sees two different answers.
+            if (m.opportunityId() != null) {
+                jdbc.update("UPDATE crm.opportunity SET next_step = :ns, next_step_due = :nd, version = version + 1 WHERE id = :id",
+                        new MapSqlParameterSource().addValue("ns", r.nextStep()).addValue("nd", r.nextStepDue()).addValue("id", m.opportunityId()));
+            }
+        }
         activities.log(new ActivityApi.NewActivity(m.accountId(), attendees.isEmpty() ? null : attendees.get(0),
                 m.opportunityId(), meetingId, null, null, ActivityType.MEETING, null,
                 m.level() + " " + r.outcome() + (r.notes() == null ? "" : " — " + r.notes()), null, actor.userId()));

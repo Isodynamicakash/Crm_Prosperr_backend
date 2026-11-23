@@ -65,6 +65,7 @@ class AssignmentAndPipelineIT extends IntegrationTest {
         assertEquals("L1", stage(q.get("account")));
         assertEquals("MEETING_COMPLETED", db.queryForObject("SELECT engagement_status FROM crm.stakeholder WHERE id = ?", String.class, q.get("stakeholder")));
         assertEquals("Send docs", db.queryForObject("SELECT next_step FROM crm.account WHERE id = ?", String.class, q.get("account")));
+        assertEquals("Send docs", db.queryForObject("SELECT next_step FROM crm.opportunity WHERE id = ?", String.class, q.get("opportunity")));
     }
 
     @Test
