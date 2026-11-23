@@ -44,7 +44,21 @@ public class SarvamClient {
     /** Transcribes a short WAV clip; Sarvam detects the language (22 Indian languages, English, and mixes of them). */
     public String transcribe(byte[] wav) { return transcribeWithLanguage(wav).text(); }
 
+    /** Sarvam's live endpoint takes up to 30 s, so longer notes are cut into 25 s pieces and the text joined. */
     public Transcript transcribeWithLanguage(byte[] wav) {
+        List<byte[]> pieces = WavChunks.split(wav, 25);
+        if (pieces.size() == 1) return transcribeOne(wav);
+        StringBuilder text = new StringBuilder();
+        String lang = null;
+        for (byte[] p : pieces) {
+            Transcript t = transcribeOne(p);
+            if (lang == null) lang = t.language();
+            if (!t.text().isBlank()) text.append(text.isEmpty() ? "" : " ").append(t.text());
+        }
+        return new Transcript(text.toString(), lang);
+    }
+
+    private Transcript transcribeOne(byte[] wav) {
         String boundary = "----crm" + UUID.randomUUID();
         var body = new ByteArrayOutputStream();
         try {

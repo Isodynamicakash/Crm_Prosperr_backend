@@ -24,7 +24,7 @@ class CallNoteServiceTest {
     final AtomicReference<String> sentPrompt = new AtomicReference<>();
     final ObjectMapper json = new ObjectMapper();
 
-    final SarvamClient fake = new SarvamClient(json, new CrmProperties(null, null, null, new CrmProperties.Ai("k", null, null, null))) {
+    final SarvamClient fake = new SarvamClient(json, new CrmProperties(null, null, null, new CrmProperties.Ai("k", null, null, null), null)) {
         @Override public String chat(String system, String user) { sentPrompt.set(user); return reply.get(); }
         @Override public Transcript transcribeWithLanguage(byte[] wav) { return new Transcript("transcribed", "en-IN"); }
     };

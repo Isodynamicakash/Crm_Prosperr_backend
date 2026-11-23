@@ -19,7 +19,7 @@ class FormFillServiceTest {
     final AtomicReference<String> reply = new AtomicReference<>("{}");
     final AtomicReference<String> sent = new AtomicReference<>();
     final ObjectMapper json = new ObjectMapper();
-    final SarvamClient fake = new SarvamClient(json, new CrmProperties(null, null, null, new CrmProperties.Ai("k", null, null, null))) {
+    final SarvamClient fake = new SarvamClient(json, new CrmProperties(null, null, null, new CrmProperties.Ai("k", null, null, null), null)) {
         @Override public String chat(String system, String user) { sent.set(user); return reply.get(); }
     };
     final FormFillService service = new FormFillService(fake, new CallNoteService(fake, null, json, clock), null, json, clock);

@@ -40,6 +40,8 @@ public class SecurityConfig {
             .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(a -> a
                 .requestMatchers(HttpMethod.POST, "/api/auth/google", "/api/auth/dev-login").permitAll()
+                // Google redirects the browser here without our token; the signed state parameter identifies the user.
+                .requestMatchers(HttpMethod.GET, "/api/integrations/google/callback").permitAll()
                 .requestMatchers("/public/**", "/actuator/health", "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                 .anyRequest().authenticated())
             .oauth2ResourceServer(o -> o.jwt(j -> j.jwtAuthenticationConverter(roleConverter())));

@@ -29,7 +29,7 @@ import java.util.regex.Pattern;
  */
 @Service
 public class CallNoteService {
-    static final int MAX_AUDIO_BYTES = 2_500_000;   // ~75 s of 16 kHz mono WAV; the UI stops at 30 s
+    static final int MAX_AUDIO_BYTES = 4_000_000;   // ~2 minutes of 16 kHz mono WAV (uploaded WhatsApp notes); recordings stop at 30 s
     static final int MAX_TEXT_CHARS = 2_000;
     static final int HOURLY_LIMIT = 60;
     private static final Pattern JSON_OBJECT = Pattern.compile("\\{.*}", Pattern.DOTALL);
@@ -55,7 +55,7 @@ public class CallNoteService {
 
     void checkAudio(byte[] wav) {
         if (wav == null || wav.length < 1_000) throw new DomainException("AUDIO_EMPTY", "The recording is empty. Hold the mic button and speak.");
-        if (wav.length > MAX_AUDIO_BYTES) throw new DomainException("AUDIO_TOO_LONG", "Keep voice notes under 30 seconds.");
+        if (wav.length > MAX_AUDIO_BYTES) throw new DomainException("AUDIO_TOO_LONG", "Keep voice notes under 2 minutes.");
         if (!(wav[0] == 'R' && wav[1] == 'I' && wav[2] == 'F' && wav[3] == 'F')) throw new DomainException("AUDIO_FORMAT", "Send the recording as WAV audio.");
     }
 
