@@ -165,6 +165,22 @@ public class SequenceService {
                    AND stakeholder_id IN (SELECT id FROM crm.stakeholder WHERE account_id = :a)""", Map.of("a", e.accountId()));
     }
 
+    /**
+     * A prospect handed to another BDR (manual reassignment or a leaver's handover): sequences the old BDR started at
+     * that account move to the new BDR, paused, so nothing keeps going out from the old person's Gmail. The new BDR
+     * resumes them from the Sequences page, sending from their own mailbox.
+     */
+    @EventListener
+    public void onAccountAssigned(com.prosperr.crm.assignment.api.AccountAssigned e) {
+        if (!"BDR".equals(e.ownerType()) || e.previousOwnerId() == null || e.newOwnerId() == null) return;
+        jdbc.update("""
+                UPDATE crm.sequence_enrollment SET enrolled_by = :to,
+                       status = CASE WHEN status = 'RUNNING' THEN 'PAUSED' ELSE status END
+                 WHERE enrolled_by = :from AND status IN ('RUNNING','PAUSED')
+                   AND stakeholder_id IN (SELECT id FROM crm.stakeholder WHERE account_id = :a)""",
+                Map.of("to", e.newOwnerId(), "from", e.previousOwnerId(), "a", e.accountId()));
+    }
+
     /** Public unsubscribe link (DPDP / PRD privacy): do-not-contact + stop with OPT_OUT. */
     @Transactional
     public boolean unsubscribe(UUID enrollmentId) {
@@ -222,6 +238,7 @@ public class SequenceService {
         if (!w.isOpen(now)) { reschedule(e.id(), w.nextOpen(now)); return false; }
         Mailbox box = mailbox(e.ownerId()).orElse(null);
         if (box == null || !box.status().equals("CONNECTED")) { pause(e.id(), true); return false; }
+        if (!users.get(e.ownerId()).active()) { pause(e.id(), true); return false; }   // deactivated: never send from a leaver's Gmail
         Integer sentToday = jdbc.queryForObject("""
                 SELECT count(*) FROM crm.email_message WHERE sender_user_id = :u AND status = 'SENT'
                    AND sent_at >= :dayStart""", new MapSqlParameterSource().addValue("u", e.ownerId())

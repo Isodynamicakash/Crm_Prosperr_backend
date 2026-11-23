@@ -2,6 +2,7 @@ package com.prosperr.crm.assignment.web;
 
 import com.prosperr.crm.account.api.AccountView;
 import com.prosperr.crm.assignment.application.AssignmentService;
+import com.prosperr.crm.assignment.application.HandoverService;
 import com.prosperr.crm.shared.domain.Role;
 import com.prosperr.crm.shared.security.CurrentUser;
 import com.prosperr.crm.shared.web.ForbiddenException;
@@ -18,8 +19,10 @@ public class AssignmentController {
     private final AssignmentService assignment;
     private final CurrentUser current;
 
-    public AssignmentController(AssignmentService assignment, CurrentUser current) {
-        this.assignment = assignment; this.current = current;
+    private final HandoverService handover;
+
+    public AssignmentController(AssignmentService assignment, HandoverService handover, CurrentUser current) {
+        this.assignment = assignment; this.handover = handover; this.current = current;
     }
 
     @GetMapping("/assignment/queue")
@@ -56,6 +59,20 @@ public class AssignmentController {
     }
 
     public record Bulk(UUID fromUserId, List<AssignmentService.BulkMove> moves) {}
+
+    /** Handover plan for someone leaving: proposed new owner per account (BALANCED, ROUND_ROBIN or ONE). Saves nothing. */
+    @GetMapping("/assignment/handover/{fromUserId}")
+    public Map<String, Object> handoverPlan(@PathVariable UUID fromUserId, @RequestParam(required = false) String strategy,
+                                            @RequestParam(required = false) UUID toUserId) {
+        return handover.plan(fromUserId, strategy, toUserId, current.get());
+    }
+
+    public record Handover(List<HandoverService.Move> moves) {}
+
+    @PostMapping("/assignment/handover/{fromUserId}")
+    public Map<String, Object> handoverApply(@PathVariable UUID fromUserId, @RequestBody Handover h) {
+        return handover.apply(fromUserId, h.moves(), current.get());
+    }
 
     @PostMapping("/assignment/bulk")
     public Map<String, Integer> bulk(@RequestBody Bulk b) {
