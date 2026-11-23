@@ -36,10 +36,11 @@ public class ImportController {
     public Object fields() { return ImportService.FIELDS; }
 
     @GetMapping("/{id}")
-    public Map<String, Object> summary(@PathVariable UUID id) { return imports.summary(id); }
+    public Map<String, Object> summary(@PathVariable UUID id) { imports.checkOwner(id, current.get()); return imports.summary(id); }
 
     @GetMapping("/{id}/rows")
     public ResponseEntity<?> rows(@PathVariable UUID id, @RequestParam(required = false) String format) {
+        imports.checkOwner(id, current.get());
         return TableExport.respond(imports.rows(id), format, "import-report");
     }
 

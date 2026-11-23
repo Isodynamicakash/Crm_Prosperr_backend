@@ -57,7 +57,11 @@ public class UserService implements UserDirectory {
         AppUser u = entity(id);
         if (c.fullName() != null) u.setFullName(c.fullName().trim());
         if (c.phone() != null) u.setPhone(c.phone());
-        if (c.role() != null) u.setRole(c.role());
+        if (c.role() != null && c.role() != u.getRole()) {
+            if (u.getRole() == Role.ADMIN && u.isActive() && activeAdmins() <= 1)
+                throw new DomainException("LAST_ADMIN", "Keep at least one active admin. Make someone else admin first.");
+            u.setRole(c.role());
+        }
         if (c.managerId() != null) u.setManagerId(c.managerId());
         return view(u);
     }
@@ -66,8 +70,11 @@ public class UserService implements UserDirectory {
 
     /** Deactivate and return every account the user owns, active and inactive, for reassignment. */
     @Transactional
-    public List<OwnedAccount> deactivate(UUID id) {
+    public List<OwnedAccount> deactivate(UUID id, UUID byUserId) {
         AppUser u = entity(id);
+        if (id.equals(byUserId)) throw new DomainException("CANNOT_DEACTIVATE_SELF", "You can't deactivate your own account");
+        if (u.getRole() == Role.ADMIN && activeAdmins() <= 1)
+            throw new DomainException("LAST_ADMIN", "Keep at least one active admin. Make someone else admin first.");
         u.setActive(false);
         u.setDeactivatedAt(Instant.now(clock));
         return ownedAccounts(id);
@@ -79,6 +86,10 @@ public class UserService implements UserDirectory {
         u.setActive(true);
         u.setDeactivatedAt(null);
         return view(u);
+    }
+
+    long activeAdmins() {
+        return repo.findAllByOrderByFullName().stream().filter(x -> x.getRole() == Role.ADMIN && x.isActive()).count();
     }
 
     public List<OwnedAccount> ownedAccounts(UUID userId) {

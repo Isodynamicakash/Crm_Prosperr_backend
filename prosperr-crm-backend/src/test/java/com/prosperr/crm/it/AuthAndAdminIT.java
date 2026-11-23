@@ -75,4 +75,17 @@ class AuthAndAdminIT extends IntegrationTest {
         put("/api/admin/permissions", admin, Map.of("role", "AE", "action", "REACTIVATE", "zone", "ANY", "scope", "OWN"));
         assertEquals(1, db.queryForObject("SELECT count(*) FROM crm.role_field_permission", Integer.class));
     }
+
+    @Test
+    void Admin_cannotLockEveryoneOut_andDeactivationCutsAccessAtOnce() throws Exception {
+        post("/api/admin/users/" + admin + "/deactivate", admin, null, 422);                   // not yourself
+        call(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch("/api/admin/users/" + admin), admin, Map.of("role", "MANAGER"), 422); // would leave no admin
+        assertEquals("ADMIN", db.queryForObject("SELECT role FROM crm.app_user WHERE id = ?", String.class, admin));
+        get("/api/my-day", bdr2);                                                              // token works
+        post("/api/admin/users/" + bdr2 + "/deactivate", admin, null);
+        call(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/my-day"), bdr2, null, 401);
+        get("/api/my-day", bdr1);                                                              // token issued as BDR
+        patch("/api/admin/users/" + bdr1, admin, Map.of("role", "AE"));                         // role change: old token stops
+        call(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/api/my-day"), bdr1, null, 401);
+    }
 }

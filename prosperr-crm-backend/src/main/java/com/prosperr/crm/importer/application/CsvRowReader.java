@@ -23,7 +23,7 @@ class CsvRowReader implements RowReader {
             List<String> headers = p.getHeaderNames();
             for (CSVRecord r : p) {
                 Map<String, String> row = new LinkedHashMap<>();
-                for (String h : headers) row.put(h.trim(), r.isMapped(h) ? r.get(h) : null);
+                for (String h : headers) row.put(h.replace("\uFEFF", "").trim(), r.isMapped(h) ? r.get(h) : null);   // Excel adds a BOM
                 rows.add(row);
             }
         }

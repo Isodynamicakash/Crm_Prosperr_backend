@@ -63,8 +63,11 @@ public class SecurityConfig {
     JwtEncoder jwtEncoder(SecretKey appJwtKey) { return new NimbusJwtEncoder(new ImmutableSecret<>(appJwtKey)); }
 
     @Bean
-    JwtDecoder jwtDecoder(SecretKey appJwtKey) {
-        return NimbusJwtDecoder.withSecretKey(appJwtKey).macAlgorithm(MacAlgorithm.HS256).build();
+    JwtDecoder jwtDecoder(SecretKey appJwtKey, ActiveUserTokenValidator activeUser) {
+        NimbusJwtDecoder d = NimbusJwtDecoder.withSecretKey(appJwtKey).macAlgorithm(MacAlgorithm.HS256).build();
+        d.setJwtValidator(new org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator<>(
+                org.springframework.security.oauth2.jwt.JwtValidators.createDefault(), activeUser));
+        return d;
     }
 
     private static CorsConfigurationSource cors(CrmProperties props) {

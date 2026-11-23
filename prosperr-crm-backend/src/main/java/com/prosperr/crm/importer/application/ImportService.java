@@ -36,6 +36,9 @@ public class ImportService {
     public static final Set<String> FIELDS = Set.of("company", "website", "city", "employeeCount", "taxableEmployeeCount",
             "licensePotential", "industry", "leadSource", "apolloId", "firstName", "lastName", "fullName", "designation",
             "department", "email", "email2", "phone", "phone2", "linkedin", "bdrEmail", "remarks");
+    /** Keeps one upload inside a single request on a small server; bigger lists go in batches. */
+    public static final int MAX_ROWS = 5_000;
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ImportService.class);
 
     private final NamedParameterJdbcTemplate jdbc;
     private final List<RowReader> readers;
@@ -62,16 +65,29 @@ public class ImportService {
         for (String f : mapping.values()) if (!FIELDS.contains(f)) throw new DomainException("UNKNOWN_FIELD", "Unknown field " + f);
         RowReader reader = readers.stream().filter(r -> r.supports(fileName)).findFirst()
                 .orElseThrow(() -> new DomainException("FILE_TYPE", "Upload a .csv or .xlsx file"));
-        List<Map<String, String>> raw = reader.read(in);
+        if (!mapping.containsValue("company")) throw new DomainException("MAPPING_INCOMPLETE", "Map a column to Company before importing");
+        if (!mapping.containsValue("fullName") && !mapping.containsValue("firstName"))
+            throw new DomainException("MAPPING_INCOMPLETE", "Map a column to the person's name (full name or first name)");
+        List<Map<String, String>> raw;
+        try { raw = new ArrayList<>(reader.read(in)); }
+        catch (RuntimeException | IOException e) {
+            throw new DomainException("FILE_UNREADABLE", "This file couldn't be read. Save it again as .csv (UTF-8) or .xlsx and retry.");
+        }
+        raw.removeIf(r -> r.values().stream().allMatch(v -> v == null || v.isBlank()));   // blank spreadsheet rows
+        if (raw.isEmpty()) throw new DomainException("IMPORT_EMPTY", "The file has no data rows");
+        if (raw.size() > MAX_ROWS)
+            throw new DomainException("IMPORT_TOO_LARGE", "This file has " + raw.size() + " rows. Split it into files of up to " + MAX_ROWS + " rows.");
         UUID job = jdbc.queryForObject("""
                 INSERT INTO crm.import_job (source, file_name, column_mapping, status, total_rows, created_by)
                 VALUES (:s, :f, CAST(:m AS jsonb), 'VALIDATING', :n, :by) RETURNING id""",
                 new MapSqlParameterSource().addValue("s", source == null ? "MANUAL_UPLOAD" : source).addValue("f", fileName)
                         .addValue("m", json.writeValueAsString(mapping)).addValue("n", raw.size()).addValue("by", actor.userId()), UUID.class);
         int i = 1;
+        Map<String, Integer> seen = new HashMap<>();   // same person twice in one file
         for (Map<String, String> r : raw) {
             Map<String, String> mapped = map(r, mapping);
-            Preview pv = preview(mapped);
+            Preview pv = withinFile(mapped, i, seen);
+            if (pv == null) pv = preview(mapped);
             jdbc.update("""
                     INSERT INTO crm.import_row (import_job_id, row_no, raw, result, matched_account_id, matched_stakeholder_id, message)
                     VALUES (:j, :n, CAST(:raw AS jsonb), :res, :acc, :st, :msg)""",
@@ -98,6 +114,18 @@ public class ImportService {
     Preview preview(Map<String, String> r) {
         if (!r.containsKey("company")) return new Preview("ERROR", null, null, "Company is missing");
         if (!r.containsKey("fullName") && !r.containsKey("firstName")) return new Preview("ERROR", null, null, "Person name is missing");
+        for (String key : List.of("email", "email2"))
+            if (r.get(key) != null && Normalizer.email(r.get(key)).isEmpty()) return new Preview("ERROR", null, null, "Invalid email: " + r.get(key));
+        for (String key : List.of("phone", "phone2"))
+            if (r.get(key) != null && Normalizer.phoneE164(r.get(key)).isEmpty()) return new Preview("ERROR", null, null, "Invalid phone: " + r.get(key));
+        if (r.get("bdrEmail") != null) {
+            var bdr = users.findByEmail(r.get("bdrEmail").trim());
+            if (bdr.isEmpty() || bdr.get().role() != Role.BDR || !bdr.get().active())
+                return new Preview("ERROR", null, null, "Owner " + r.get("bdrEmail") + " is not an active BDR");
+        }
+        for (String key : List.of("employeeCount", "taxableEmployeeCount", "licensePotential"))
+            if (r.get(key) != null && (integer(r.get(key)) == null || integer(r.get(key)) > 5_000_000))
+                return new Preview("ERROR", null, null, "Not a valid number for " + key + ": " + r.get(key));
         Optional<String> domain = Normalizer.domain(r.get("website"));
         UUID acc = domain.flatMap(d -> jdbc.queryForList("SELECT id FROM crm.account WHERE domain = :d", Map.of("d", d), UUID.class)
                 .stream().findFirst()).orElse(null);
@@ -126,12 +154,39 @@ public class ImportService {
                 if (!hit.isEmpty()) return new Preview("REVIEW", acc, hit.get(0), "Phone matches an existing person: " + ph.get());
             }
         }
-        return acc == null ? new Preview("CREATED", null, null, "New company") : new Preview("MERGED", acc, null, "Joins existing company");
+        String warn = warnings(r);
+        return acc == null ? new Preview("CREATED", null, null, "New company" + warn) : new Preview("MERGED", acc, null, "Joins existing company" + warn);
+    }
+
+    /** Values that don't match a configured city or list are left blank; say so in the preview instead of silently. */
+    String warnings(Map<String, String> r) {
+        List<String> w = new ArrayList<>();
+        if (r.get("city") != null && city(r.get("city")) == null) w.add("city '" + r.get("city") + "' not found");
+        if (r.get("industry") != null && picklist("INDUSTRY", r.get("industry")) == null) w.add("industry '" + r.get("industry") + "' not found");
+        if (r.get("leadSource") != null && picklist("LEAD_SOURCE", r.get("leadSource")) == null) w.add("lead source '" + r.get("leadSource") + "' not found");
+        return w.isEmpty() ? "" : " · " + String.join(", ", w) + " (left blank)";
+    }
+
+    /** Flags a row whose email, phone or LinkedIn already appeared earlier in the same file. */
+    static Preview withinFile(Map<String, String> r, int rowNo, Map<String, Integer> seen) {
+        List<String> keys = new ArrayList<>();
+        for (String k : List.of("email", "email2")) Normalizer.email(r.get(k)).ifPresent(e -> keys.add("e:" + e));
+        for (String k : List.of("phone", "phone2")) Normalizer.phoneE164(r.get(k)).ifPresent(p -> keys.add("p:" + p));
+        Normalizer.linkedIn(r.get("linkedin")).ifPresent(l -> keys.add("l:" + l));
+        for (String k : keys) {
+            Integer first = seen.get(k);
+            if (first != null) return new Preview("DUPLICATE", null, null, "Same person as row " + first + " in this file");
+        }
+        keys.forEach(k -> seen.put(k, rowNo));
+        return null;
     }
 
     /** Apply rows marked CREATED or MERGED (and REVIEW when includeReview). Each row in its own transaction. */
     public Map<String, Object> commit(UUID jobId, boolean includeReview, Actor actor) {
-        jdbc.update("UPDATE crm.import_job SET status = 'IMPORTING' WHERE id = :j", Map.of("j", jobId));
+        checkOwner(jobId, actor);
+        // Only one commit per job: a double click or a second tab gets a clear error instead of duplicate records.
+        int claimed = jdbc.update("UPDATE crm.import_job SET status = 'IMPORTING' WHERE id = :j AND status = 'READY'", Map.of("j", jobId));
+        if (claimed == 0) throw new DomainException("IMPORT_NOT_READY", "This import was already run or is still running");
         List<Map<String, Object>> rows = jdbc.queryForList("""
                 SELECT id, row_no, raw::text AS raw, result FROM crm.import_row WHERE import_job_id = :j ORDER BY row_no""", Map.of("j", jobId));
         int created = 0, merged = 0, errors = 0;
@@ -146,8 +201,10 @@ public class ImportService {
                 if ("CREATED".equals(outcome)) created++; else merged++;
             } catch (RuntimeException | IOException e) {
                 errors++;
+                String msg = e instanceof DomainException ? e.getMessage() : "Couldn't import this row";
+                if (!(e instanceof DomainException)) log.warn("Import {} row {} failed", jobId, rowId, e);
                 jdbc.update("UPDATE crm.import_row SET result = 'ERROR', message = :m WHERE id = :id",
-                        new MapSqlParameterSource().addValue("m", e.getMessage()).addValue("id", rowId));
+                        new MapSqlParameterSource().addValue("m", msg).addValue("id", rowId));
             }
         }
         jdbc.update("""
@@ -157,7 +214,8 @@ public class ImportService {
     }
 
     String applyRow(Map<String, String> r, Actor actor, long rowId) {
-        UUID owner = Optional.ofNullable(r.get("bdrEmail")).flatMap(users::findByEmail).map(u -> u.id())
+        UUID owner = Optional.ofNullable(r.get("bdrEmail")).map(String::trim).flatMap(users::findByEmail)
+                .filter(u -> u.role() == Role.BDR && u.active()).map(u -> u.id())
                 .orElse(actor.role() == Role.BDR ? actor.userId() : null);
         var res = accounts.resolveOrCreate(new AccountApi.CreateAccount(r.get("company"), r.get("website"), picklist("INDUSTRY", r.get("industry")),
                 null, city(r.get("city")), integer(r.get("employeeCount")), integer(r.get("taxableEmployeeCount")),
@@ -202,6 +260,14 @@ public class ImportService {
         if (v == null) return null;
         String d = v.replaceAll("[^0-9]", "");
         return d.isEmpty() ? null : Integer.valueOf(d);
+    }
+
+    /** Only the person who uploaded a file (or a manager/admin) can see or run it. */
+    public void checkOwner(UUID jobId, Actor actor) {
+        UUID by = jdbc.queryForList("SELECT created_by FROM crm.import_job WHERE id = :j", Map.of("j", jobId), UUID.class)
+                .stream().findFirst().orElseThrow(() -> new NotFoundException("Import", jobId));
+        if (!actor.isLeadership() && !actor.userId().equals(by))
+            throw new com.prosperr.crm.shared.web.ForbiddenException("This import belongs to someone else");
     }
 
     public Map<String, Object> summary(UUID jobId) {

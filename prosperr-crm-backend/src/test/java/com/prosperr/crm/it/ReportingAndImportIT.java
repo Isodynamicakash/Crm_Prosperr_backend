@@ -7,6 +7,7 @@ import org.springframework.mock.web.MockMultipartFile;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -141,5 +142,52 @@ class ReportingAndImportIT extends IntegrationTest {
         assertEquals("https://www.linkedin.com/in/rita",
                 db.queryForObject("SELECT linkedin_url FROM crm.stakeholder WHERE first_name = 'Rita'", String.class));
         assertEquals("+919876511111", db.queryForObject("SELECT phone_e164 FROM crm.stakeholder_phone", String.class));
+    }
+
+    private com.fasterxml.jackson.databind.JsonNode upload(UUID as, String csv, Map<String, String> mapping, int status) throws Exception {
+        var res = mvc.perform(MockMvcRequestBuilders.multipart("/api/imports").file(new MockMultipartFile("file", "leads.csv", "text/csv",
+                csv.getBytes(StandardCharsets.UTF_8))).param("mapping", json.writeValueAsString(mapping))
+                .header("Authorization", "Bearer " + token(as))).andReturn();
+        assertEquals(status, res.getResponse().getStatus(), res.getResponse().getContentAsString());
+        return json.readTree(res.getResponse().getContentAsString());
+    }
+
+    @Test
+    void Import_guardrails_inFileDuplicates_badValues_doubleCommit_ownership() throws Exception {
+        // Excel "CSV UTF-8" starts with a BOM; the Company column must still map.
+        String csv = "\uFEFFCompany,Name,Email,Mobile,Owner,City\n"
+                + "Alpha Co,Ravi K,ravi@alpha.in,98111 22233,,Bengaluru\n"
+                + "Alpha Co,Ravi Kumar,RAVI@alpha.in,,,Bengaluru\n"          // same email as row 1
+                + "Beta Co,Meena S,not-an-email,,,Bengaluru\n"               // invalid email
+                + "Gamma Co,Joy P,joy@gamma.in,,mahesh@prosperr.io,Bengaluru\n" // owner is not a BDR
+                + "Delta Co,Ana T,ana@delta.in,,,Atlantis\n"                 // unknown city -> warning
+                + ",,,,,\n";                                                  // blank line ignored
+        Map<String, String> mapping = Map.of("Company", "company", "Name", "fullName", "Email", "email", "Mobile", "phone",
+                "Owner", "bdrEmail", "City", "city");
+        String job = upload(bdr1, csv, mapping, 200).path("id").asText();
+        JsonNode rows = get("/api/imports/" + job + "/rows", bdr1);
+        assertEquals(5, rows.size());
+        assertEquals("CREATED", rows.get(0).path("result").asText());
+        assertEquals("DUPLICATE", rows.get(1).path("result").asText());
+        assertTrue(rows.get(1).path("message").asText().contains("row 1"));
+        assertEquals("ERROR", rows.get(2).path("result").asText());
+        assertEquals("ERROR", rows.get(3).path("result").asText());
+        assertTrue(rows.get(4).path("message").asText().contains("Atlantis"));
+
+        post("/api/imports/" + job + "/commit", bdr2, null, 403);   // someone else's file
+        get("/api/imports/" + job, manager);                         // managers may look
+        JsonNode done = post("/api/imports/" + job + "/commit", bdr1, null);
+        assertEquals(2, done.path("created").asInt());
+        post("/api/imports/" + job + "/commit", bdr1, null, 422);   // second click does nothing
+        assertEquals(2, db.queryForObject("SELECT count(*) FROM crm.account", Integer.class));
+    }
+
+    @Test
+    void Import_rejectsEmptyHugeAndUnmappedFiles() throws Exception {
+        upload(bdr1, "Company,Name\n", Map.of("Company", "company", "Name", "fullName"), 422);
+        upload(bdr1, "Company,Name\nA,B\n", Map.of("Name", "fullName"), 422);
+        StringBuilder big = new StringBuilder("Company,Name\n");
+        for (int i = 0; i <= com.prosperr.crm.importer.application.ImportService.MAX_ROWS; i++) big.append("C").append(i).append(",P\n");
+        upload(bdr1, big.toString(), Map.of("Company", "company", "Name", "fullName"), 422);
     }
 }
