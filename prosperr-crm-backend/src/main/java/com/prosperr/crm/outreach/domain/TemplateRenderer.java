@@ -11,7 +11,8 @@ import java.util.Map;
  * Renders the seed templates (PRD Appendix A, M3-4, M3-5).
  * <ul>
  *   <li>{{First Name}} empty -> "there"</li>
- *   <li>{{Company}}, sender name and phone empty -> sending is blocked</li>
+ *   <li>{{Company}} or sender name empty -> sending is blocked</li>
+ *   <li>{{Sender Phone}} empty -> left out of the signature ("Prosperr.io | 98..." becomes "Prosperr.io")</li>
  *   <li>{{Designation}} empty -> the sentence that uses it is left out</li>
  *   <li>{{Product Link}} empty -> the line is left out</li>
  *   <li>{{Call Line}} only when the sequence started from a "Did Not Pick" call (M3-7)</li>
@@ -31,7 +32,6 @@ public final class TemplateRenderer {
         List<String> missing = new ArrayList<>();
         if (blank(ctx.company())) missing.add("Company");
         if (blank(ctx.senderFirstName()) || blank(ctx.senderFullName())) missing.add("Sender name");
-        if (blank(ctx.senderPhone())) missing.add("Sender phone");
         if (!missing.isEmpty()) {
             throw new DomainException("MERGE_FIELD_MISSING", "Cannot send: missing " + String.join(", ", missing));
         }
@@ -52,12 +52,13 @@ public final class TemplateRenderer {
         String t = text;
         if (blank(ctx.designation())) t = dropSentencesWith(t, "{{Designation}}");
         if (blank(ctx.productLink())) t = dropLinesWith(t, "{{Product Link}}");
+        if (blank(ctx.senderPhone())) t = dropLinesWith(t.replaceAll("\\s*[|·,-]\\s*\\{\\{Sender Phone}}", ""), "{{Sender Phone}}");
         t = t.replace("{{First Name}}", blank(ctx.firstName()) ? "there" : ctx.firstName());
         t = t.replace("{{Company}}", ctx.company());
         t = t.replace("{{Designation}}", nz(ctx.designation()));
         t = t.replace("{{Sender First Name}}", ctx.senderFirstName());
         t = t.replace("{{Sender Full Name}}", ctx.senderFullName());
-        t = t.replace("{{Sender Phone}}", ctx.senderPhone());
+        t = t.replace("{{Sender Phone}}", nz(ctx.senderPhone()));
         t = t.replace("{{Product Link}}", nz(ctx.productLink()));
         t = t.replace("{{Stakeholder Link}}", nz(ctx.stakeholderLink()));
         t = t.replace("{{Call Task Due}}", nz(ctx.callTaskDue()));

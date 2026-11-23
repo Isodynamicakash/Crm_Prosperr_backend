@@ -50,9 +50,16 @@ class OutreachRulesTest {
         var noCompany = new MergeContext("Rita", " ", "CFO", "Jasim", "Jasim Khan", "+91", null, null, null,
                 Department.FINANCE, false);
         assertThrows(DomainException.class, () -> r.render("s", body, noCompany));
+    }
+
+    @Test
+    void missingSenderPhoneIsLeftOutOfTheSignature() {
         var noPhone = new MergeContext("Rita", "ABC", "CFO", "Jasim", "Jasim Khan", null, null, null, null,
                 Department.FINANCE, false);
-        assertThrows(DomainException.class, () -> r.render("s", body, noPhone));
+        var out = r.render("s", body, noPhone);
+        assertTrue(out.body().endsWith("Jasim Khan / Prosperr.io"), out.body());
+        assertFalse(out.body().contains("{{"));
+        assertFalse(out.body().contains("|"));
     }
 
     @Test
