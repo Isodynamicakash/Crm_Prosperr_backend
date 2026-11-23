@@ -260,7 +260,11 @@ public class DashboardService {
                 .addValue("end", Db.ts(today.plusDays(1).atStartOfDay(Ist.ZONE).toInstant()));
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("assigned", count("SELECT count(*) FROM crm.account a WHERE a.ae_owner_id = :u", p));
-        m.put("active", count("SELECT count(*) FROM crm.account a WHERE a.ae_owner_id = :u AND a.account_status = 'ACTIVE'", p));
+        m.put("active", count("""
+                SELECT count(*) FROM crm.account a
+                 WHERE a.ae_owner_id = :u
+                   AND a.account_status = 'ACTIVE'
+                   AND a.lifecycle_stage NOT IN ('WON','LOST','IMPLEMENTATION')""", p));
         m.put("inactive", count("SELECT count(*) FROM crm.account a WHERE a.ae_owner_id = :u AND a.account_status = 'INACTIVE'", p));
         m.put("l1Pending", count("""
                 SELECT count(DISTINCT mt.account_id) FROM crm.meeting mt WHERE mt.ae_id = :u AND mt.level = 'L1'
