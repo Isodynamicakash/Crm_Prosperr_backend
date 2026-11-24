@@ -55,11 +55,13 @@ public class CardScanService {
         card.put("company", tidyCompany(text(r, "company")));
         List<String> emails = new ArrayList<>();
         r.path("emails").forEach(e -> { var m = EMAIL.matcher(e.asText("")); if (m.find()) emails.add(m.group().toLowerCase(Locale.ROOT)); });
-        card.put("emails", emails.stream().distinct().toList());
+        card.put("emails", ownEmails(emails.stream().distinct().toList(), text(r, "website"), text(r, "fullName")));
         List<String> phones = new ArrayList<>();
         r.path("phones").forEach(p -> { String v = p.asText("").trim(); if (v.replaceAll("\\D", "").length() >= 8) phones.add(v); });
         card.put("phones", phones.stream().distinct().toList());
         String website = text(r, "website");
+        @SuppressWarnings("unchecked") List<String> kept = (List<String>) card.get("emails");
+        emails.retainAll(kept);
         if (website == null && !emails.isEmpty() && !freeMail(emails.get(0))) website = emails.get(0).substring(emails.get(0).indexOf('@') + 1);
         card.put("website", website);
         card.put("linkedin", text(r, "linkedin"));
@@ -130,6 +132,19 @@ public class CardScanService {
         if (t.matches(".*\\b(finance|financial|cfo|accounts?|treasury|controller|tax)\\b.*")) return "FINANCE";
         if (t.matches(".*\\b(hr|human|people|chro|talent|reward|compensation|benefits?)\\b.*")) return "HR";
         return null;
+    }
+
+    /**
+     * Drops emails that belong to someone else in the photo (another card on the desk): when the card has a website,
+     * keep emails at that domain or with the person's name in them; if none qualify, keep what was read.
+     */
+    static List<String> ownEmails(List<String> emails, String website, String fullName) {
+        if (emails.size() < 2 || website == null) return emails;
+        String domain = website.toLowerCase(Locale.ROOT).replaceAll("^https?://", "").replaceAll("^www\\.", "").replaceAll("/.*$", "");
+        List<String> names = fullName == null ? List.of() : Arrays.stream(fullName.toLowerCase(Locale.ROOT).split("\\s+")).filter(n -> n.length() >= 3).toList();
+        List<String> own = emails.stream().filter(e -> e.endsWith("@" + domain) || e.endsWith("." + domain)
+                || names.stream().anyMatch(n -> e.substring(0, e.indexOf('@')).contains(n))).toList();
+        return own.isEmpty() ? emails : own;
     }
 
     static boolean freeMail(String email) {
