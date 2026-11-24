@@ -3,6 +3,7 @@ package com.prosperr.crm.ai.web;
 import com.prosperr.crm.ai.application.AssistantService;
 import com.prosperr.crm.ai.application.CallNoteService;
 import com.prosperr.crm.ai.application.CardScanService;
+import com.prosperr.crm.ai.application.HelpChatService;
 import com.prosperr.crm.ai.application.FormFillService;
 import com.prosperr.crm.shared.security.CurrentUser;
 import org.springframework.http.MediaType;
@@ -19,10 +20,11 @@ public class AiController {
     private final FormFillService forms;
     private final AssistantService assistant;
     private final CardScanService cards;
+    private final HelpChatService help;
     private final CurrentUser current;
 
-    public AiController(CallNoteService callNotes, FormFillService forms, AssistantService assistant, CardScanService cards, CurrentUser current) {
-        this.callNotes = callNotes; this.forms = forms; this.assistant = assistant; this.cards = cards; this.current = current;
+    public AiController(CallNoteService callNotes, FormFillService forms, AssistantService assistant, CardScanService cards, HelpChatService help, CurrentUser current) {
+        this.callNotes = callNotes; this.forms = forms; this.assistant = assistant; this.cards = cards; this.help = help; this.current = current;
     }
 
     /** Visiting card photo (JPG/PNG) to contact fields, with confidence and duplicate matches. Saves nothing. */
@@ -38,6 +40,19 @@ public class AiController {
     }
 
     /** Ask the assistant by voice (16 kHz WAV); it answers in the language spoken. Read-only. */
+    record HelpQuestion(String question, java.util.List<HelpChatService.Turn> history, String page) {}
+
+    /** Ask Prosperr: how-to answers about the CRM for BDRs, from the BDR guide only. */
+    @PostMapping("/help")
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('BDR')")
+    public HelpChatService.Answer help(@RequestBody HelpQuestion body) {
+        return help.ask(current.get().userId(), body.question(), body.history(), body.page());
+    }
+
+    @GetMapping("/help/suggestions")
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('BDR')")
+    public Map<String, Object> helpInfo() { return Map.of("enabled", help.enabled(), "suggestions", HelpChatService.suggestions()); }
+
     /** Spoken performance review for the period picked on Home (BDRs). */
     @GetMapping("/assistant/coach")
     @org.springframework.security.access.prepost.PreAuthorize("hasRole('BDR')")

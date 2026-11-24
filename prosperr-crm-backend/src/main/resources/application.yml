@@ -66,6 +66,9 @@ crm:
     sarvam-base-url: ${SARVAM_BASE_URL:https://api.sarvam.ai}
     stt-model: ${SARVAM_STT_MODEL:saaras:v3}
     chat-model: ${SARVAM_CHAT_MODEL:sarvam-105b}
+    # Optional: Groq (fast, OpenAI-compatible) for the Ask Prosperr help chat. Falls back to Sarvam when not set.
+    groq-api-key: ${GROQ_API_KEY:}
+    groq-model: ${GROQ_MODEL:llama-3.3-70b-versatile}
 
 springdoc:
   swagger-ui:
