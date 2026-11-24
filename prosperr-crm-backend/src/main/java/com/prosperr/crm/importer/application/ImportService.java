@@ -337,9 +337,7 @@ public class ImportService {
         List<String> phones = new ArrayList<>();
         Optional.ofNullable(r.get("phone")).ifPresent(phones::add);
         Optional.ofNullable(r.get("phone2")).ifPresent(phones::add);
-        Department dept = Optional.ofNullable(r.get("department")).map(d -> {
-            try { return Department.valueOf(d.toUpperCase()); } catch (IllegalArgumentException e) { return null; }
-        }).orElse(null);
+        Department dept = ImportValues.department(r.get("department"));
         var s = stakeholders.create(new StakeholderApi.CreateStakeholder(res.account().id(), r.get("firstName"), r.get("lastName"),
                 r.get("fullName"), r.get("designation"), dept, null, emails, phones, r.get("linkedin"), null, null, owner,
                 false, false, true), actor);
@@ -355,22 +353,20 @@ public class ImportService {
 
     UUID city(String name) {
         if (name == null) return null;
-        return jdbc.queryForList("SELECT id FROM crm.city WHERE lower(name) = lower(:n) OR lower(region) = lower(:n) ORDER BY name LIMIT 1",
-                Map.of("n", name.trim()), UUID.class).stream().findFirst().orElse(null);
+        return jdbc.queryForList("SELECT id FROM crm.city WHERE lower(name) = lower(:n) OR lower(name) = lower(:c) OR lower(region) = lower(:n) ORDER BY name LIMIT 1",
+                Map.of("n", name.trim(), "c", ImportValues.city(name)), UUID.class).stream().findFirst().orElse(null);
     }
 
     UUID picklist(String key, String value) {
         if (value == null) return null;
+        if (key.equals("INDUSTRY")) value = ImportValues.industry(value);
+        else if (key.equals("LEAD_SOURCE")) value = ImportValues.leadSource(value);
         return jdbc.queryForList("""
                 SELECT id FROM crm.picklist_value WHERE picklist_key = :k AND (lower(code) = lower(:v) OR lower(label) = lower(:v)) LIMIT 1""",
                 Map.of("k", key, "v", value.trim()), UUID.class).stream().findFirst().orElse(null);
     }
 
-    static Integer integer(String v) {
-        if (v == null) return null;
-        String d = v.replaceAll("[^0-9]", "");
-        return d.isEmpty() ? null : Integer.valueOf(d);
-    }
+    static Integer integer(String v) { return ImportValues.number(v); }
 
     /** Only the person who uploaded a file (or a manager/admin) can see or run it. */
     public void checkOwner(UUID jobId, Actor actor) {
