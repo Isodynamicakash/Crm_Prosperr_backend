@@ -24,6 +24,13 @@ public class DashboardService {
             "L1_BOOKED", "REFERRED", "NOT_RIGHT_STAKEHOLDER", "NOT_INTERESTED", "ALREADY_USING", "NOT_POSSIBLE", "WRONG_ICP",
             "NOT_ASSOCIATED");
 
+    /**
+     * Rows from the team's sheets that had no date were stored on 1 Jan 2026 (before the CRM existed). They stay in the
+     * CRM but never count toward a period: no real work is shown on a day it didn't happen.
+     */
+    public static final String NO_DATE = "DATE '2026-01-01'";
+    static String dated(String col) { return " AND (" + col + " AT TIME ZONE 'Asia/Kolkata')::date <> " + NO_DATE; }
+
     private final NamedParameterJdbcTemplate jdbc;
     private final TargetService targets;
     private final Clock clock;
@@ -144,7 +151,7 @@ public class DashboardService {
                 + meetings("L2", "COMPLETED", "scheduled_start") + " AS \"l2Done\", "
                 + meetings("L3", "COMPLETED", "scheduled_start") + " AS \"l3Done\", "
                 + "(SELECT count(*) FROM crm.activity act WHERE act.type = 'CALL' AND act.logged_by = u.id"
-                + " AND act.occurred_at >= :from AND act.occurred_at < :to) AS \"calls\", "
+                + " AND act.occurred_at >= :from AND act.occurred_at < :to" + dated("act.occurred_at") + ") AS \"calls\", "
                 + target("L1_BOOKED") + " AS \"l1BookedTarget\", "
                 + target("L1_DONE") + " AS \"l1DoneTarget\", "
                 + target("L2_DONE") + " AS \"l2DoneTarget\", "
@@ -182,9 +189,9 @@ public class DashboardService {
         m.put("series", jdbc.queryForList("""
                 WITH d AS (SELECT generate_series(CAST(:from AS date), CAST(:to AS date) - 1, interval '1 day')::date AS day)
                 SELECT d.day,
-                  (SELECT count(*) FROM crm.activity act WHERE act.type = 'CALL' AND %1$s = d.day AND %2$s) AS "calls",
+                  (SELECT count(*) FROM crm.activity act WHERE act.type = 'CALL' AND %1$s = d.day AND d.day <> DATE '2026-01-01' AND %2$s) AS "calls",
                   (SELECT count(*) FROM crm.activity act JOIN crm.picklist_value pv ON pv.id = act.call_outcome_id
-                     WHERE act.type = 'CALL' AND pv.code IN (:connects) AND %1$s = d.day AND %2$s) AS "connects",
+                     WHERE act.type = 'CALL' AND pv.code IN (:connects) AND %1$s = d.day AND d.day <> DATE '2026-01-01' AND %2$s) AS "connects",
                   (SELECT count(*) FROM crm.sql_submission s WHERE %3$s = d.day AND %4$s) AS "sqls",
                   (SELECT count(*) FROM crm.meeting mt WHERE mt.rescheduled_from_id IS NULL AND %5$s = d.day AND %6$s) AS "meetingsBooked",
                   (SELECT count(*) FROM crm.meeting mt WHERE mt.status = 'COMPLETED' AND %7$s = d.day AND %6$s) AS "meetingsDone",
@@ -198,9 +205,9 @@ public class DashboardService {
         m.put("outcomeMix", jdbc.queryForList("""
                 SELECT pv.label AS "outcome", pv.code, count(*) AS "count", (pv.code IN (:connects)) AS "connect"
                   FROM crm.activity act JOIN crm.picklist_value pv ON pv.id = act.call_outcome_id
-                 WHERE act.type = 'CALL' AND %s >= :from AND %s < :to AND %s
+                 WHERE act.type = 'CALL' AND %s >= :from AND %s < :to AND %s AND %s <> DATE '2026-01-01'
                  GROUP BY pv.label, pv.code ORDER BY count(*) DESC""".formatted(
-                        day.formatted("act.occurred_at"), day.formatted("act.occurred_at"), mine.formatted("act.logged_by = :u")), p));
+                        day.formatted("act.occurred_at"), day.formatted("act.occurred_at"), mine.formatted("act.logged_by = :u"), day.formatted("act.occurred_at")), p));
         m.put("stageMix", jdbc.queryForList("""
                 SELECT a.lifecycle_stage AS "stage", count(*) AS "count",
                        coalesce(sum(o.expected_mrr), 0) AS "mrr"
@@ -229,10 +236,10 @@ public class DashboardService {
         m.put("from", r[0]);
         m.put("to", r[1].minusDays(1));
         m.put("leadsGenerated", count("SELECT count(*) FROM crm.stakeholder s WHERE s.created_by = :u" + inRange.formatted("s.created_at", "s.created_at"), p));
-        m.put("calls", count("SELECT count(*) FROM crm.activity act WHERE act.type = 'CALL' AND act.logged_by = :u" + inRange.formatted("act.occurred_at", "act.occurred_at"), p));
+        m.put("calls", count("SELECT count(*) FROM crm.activity act WHERE act.type = 'CALL' AND act.logged_by = :u" + inRange.formatted("act.occurred_at", "act.occurred_at") + dated("act.occurred_at"), p));
         m.put("connects", count("""
                 SELECT count(*) FROM crm.activity act JOIN crm.picklist_value pv ON pv.id = act.call_outcome_id
-                 WHERE act.type = 'CALL' AND act.logged_by = :u AND pv.code IN (:connects)""" + inRange.formatted("act.occurred_at", "act.occurred_at"), p));
+                 WHERE act.type = 'CALL' AND act.logged_by = :u AND pv.code IN (:connects)""" + inRange.formatted("act.occurred_at", "act.occurred_at") + dated("act.occurred_at"), p));
         m.put("sequencesStarted", count("SELECT count(*) FROM crm.sequence_enrollment e WHERE e.enrolled_by = :u" + inRange.formatted("e.started_at", "e.started_at"), p));
         m.put("sqlsSubmitted", count("SELECT count(*) FROM crm.sql_submission s WHERE s.submitted_by = :u" + inRange.formatted("s.submitted_at", "s.submitted_at"), p));
         m.put("sqlsApproved", count("SELECT count(*) FROM crm.sql_submission s WHERE s.submitted_by = :u AND s.status = 'QUALIFIED_SQL'" + inRange.formatted("s.validated_at", "s.validated_at"), p));

@@ -106,8 +106,8 @@ public class BdrInsightsService implements PerformanceApi {
         String bucket = days <= 45 ? "day" : days <= 200 ? "week" : "month";
         var p = new MapSqlParameterSource().addValue("u", bdrId).addValue("from", r[0]).addValue("to", r[1])
                 .addValue("connects", DashboardService.CONNECT_CODES);
-        String d = "(%s AT TIME ZONE 'Asia/Kolkata')::date";
-        String in = " AND " + d + " >= :from AND " + d + " < :to";
+        String d = "(%1$s AT TIME ZONE 'Asia/Kolkata')::date";
+        String in = " AND " + d + " >= :from AND " + d + " < :to AND " + d + " <> " + DashboardService.NO_DATE;
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("from", r[0]);
         out.put("to", r[1].minusDays(1));
@@ -127,6 +127,8 @@ public class BdrInsightsService implements PerformanceApi {
         if (!rows.isEmpty()) for (String key : List.of("l1Booked", "l1Done", "l2Done", "l3Done", "l1BookedTarget", "l1DoneTarget", "l3DoneTarget"))
             k.put(key, rows.get(0).get(key));
         out.put("kpis", k);
+        out.put("undatedCalls", jdbc.queryForObject("SELECT count(*) FROM crm.activity x WHERE x.type = 'CALL' AND x.logged_by = :u AND (x.occurred_at AT TIME ZONE 'Asia/Kolkata')::date = "
+                + DashboardService.NO_DATE, p, Long.class));
         String b = "date_trunc('" + bucket + "', t.d)::date";
         out.put("trend", jdbc.queryForList("""
                 WITH g AS (SELECT DISTINCT %1$s AS b FROM generate_series(CAST(:from AS date), CAST(:to AS date) - 1, interval '1 day') AS t(d))
@@ -201,7 +203,7 @@ public class BdrInsightsService implements PerformanceApi {
         if (level != null) { where.append(" AND s.level = :lv"); p.addValue("lv", level); }
         if (touchedIn != null) {
             where.append(" AND EXISTS (SELECT 1 FROM crm.activity x WHERE x.stakeholder_id = s.id AND x.logged_by = :u"
-                    + " AND (x.occurred_at AT TIME ZONE 'Asia/Kolkata')::date >= :tf AND (x.occurred_at AT TIME ZONE 'Asia/Kolkata')::date < :tt)");
+                    + " AND (x.occurred_at AT TIME ZONE 'Asia/Kolkata')::date >= :tf AND (x.occurred_at AT TIME ZONE 'Asia/Kolkata')::date < :tt" + DashboardService.dated("x.occurred_at") + ")");
             p.addValue("tf", touchedIn[0]).addValue("tt", touchedIn[1]);
         }
         String order = switch (sort == null || !SORTS.contains(sort) ? "recent" : sort) {
@@ -246,7 +248,7 @@ public class BdrInsightsService implements PerformanceApi {
         f.put("me", me);
 
         var p = new MapSqlParameterSource().addValue("u", bdrId).addValue("from", r[0]).addValue("to", r[1]).addValue("connects", DashboardService.CONNECT_CODES);
-        String inRange = " AND (x.occurred_at AT TIME ZONE 'Asia/Kolkata')::date >= :from AND (x.occurred_at AT TIME ZONE 'Asia/Kolkata')::date < :to";
+        String inRange = " AND (x.occurred_at AT TIME ZONE 'Asia/Kolkata')::date >= :from AND (x.occurred_at AT TIME ZONE 'Asia/Kolkata')::date < :to" + DashboardService.dated("x.occurred_at");
         // calls and conversations per BDR in the period, for "you vs the team"
         List<Map<String, Object>> team = jdbc.queryForList("""
                 SELECT u.id, count(x.id) AS calls, count(x.id) FILTER (WHERE pv.code IN (:connects)) AS connects,
