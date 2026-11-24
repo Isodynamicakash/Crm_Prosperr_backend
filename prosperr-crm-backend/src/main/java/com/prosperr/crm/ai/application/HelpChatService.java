@@ -52,22 +52,28 @@ public class HelpChatService {
         if (q.isEmpty()) throw new DomainException("EMPTY", "Type a question.");
         if (q.length() > MAX_QUESTION) q = q.substring(0, MAX_QUESTION);
         quota.checkQuota(userId);
-        String system = system(currentPage, language(q));
+        String system = system(currentPage, language(q), guide);
         List<Turn> recent = history == null ? List.of() : history.subList(Math.max(0, history.size() - MAX_TURNS), history.size());
-        String raw;
-        String engine;
+        String focused = system(currentPage, language(q), relevant(q + " " + recent.stream().filter(t -> !"assistant".equals(t.role())).map(Turn::text).reduce("", (a, b) -> a + " " + b)));
+        String raw = null;
+        String engine = null;
         if (groq.enabled()) {
             List<Map<String, String>> msgs = new ArrayList<>();
-            msgs.add(Map.of("role", "system", "content", system));
+            msgs.add(Map.of("role", "system", "content", focused));   // fewer tokens: more questions fit in Groq's per-minute limit
             for (Turn t : recent) msgs.add(Map.of("role", "assistant".equals(t.role()) ? "assistant" : "user", "content", clip(CallNoteService.redact(t.text()))));
             msgs.add(Map.of("role", "user", "content", CallNoteService.redact(q)));
-            raw = groq.chat(msgs, 700);
-            engine = "groq";
-        } else {
+            try {
+                raw = groq.chat(msgs, 900);
+                engine = "groq";
+            } catch (DomainException e) {
+                if (!sarvam.enabled()) throw e;                // Groq busy (free-plan limit) or down: answer with Sarvam instead
+            }
+        }
+        if (raw == null) {
             StringBuilder convo = new StringBuilder();
             for (Turn t : recent) convo.append("assistant".equals(t.role()) ? "Assistant: " : "BDR: ").append(clip(CallNoteService.redact(t.text()))).append("\n");
             raw = sarvam.chat(system, (convo.isEmpty() ? "" : "Conversation so far:\n" + convo + "\n") + "BDR's question: " + CallNoteService.redact(q), 900);
-            engine = "sarvam";
+            engine = groq.enabled() ? "sarvam (groq busy)" : "sarvam";
         }
         return finish(raw, engine);
     }
@@ -88,7 +94,10 @@ public class HelpChatService {
         q.codePoints().forEach(c -> { for (int i = 0; i < blocks.length; i++) if (c >= blocks[i][0] && c <= blocks[i][1]) count[i]++; });
         int best = -1;
         for (int i = 0; i < count.length; i++) if (count[i] > 0 && (best < 0 || count[i] > count[best])) best = i;
-        return best < 0 ? "English (if the question mixes Hindi words in English letters, reply in the same Hinglish)" : names[best];
+        if (best >= 0) return names[best];
+        boolean hinglish = Pattern.compile("(?i)\\b(kaise|kaisa|kya|kyu|kyun|kyon|hai|hain|karu|karun|karna|karte|mera|meri|mere|mujhe|nahi|nhi|kab|kahan|kidhar|aur|batao|bata|wala|wali|hota|hoga|pe|ko|se)\\b")
+                .matcher(q).results().count() >= 2;
+        return hinglish ? "Hinglish (Hindi written in English letters, like the question)" : "English";
     }
 
     /** Links may only point at real pages; "/home" and the like become the right path or plain text. */
@@ -106,7 +115,34 @@ public class HelpChatService {
         return b.toString();
     }
 
-    String system(String currentPage, String language) {
+    private static final Set<String> STOP = Set.of("the", "and", "for", "how", "what", "why", "can", "does", "with", "this", "that", "from", "into",
+            "when", "where", "who", "you", "your", "are", "was", "kaise", "kya", "hai", "kar", "karu", "karna", "mera", "meri", "mere", "nahi", "kyu", "kyon");
+
+    /** The guide sections that share the most words with the question (plus Common problems); the whole guide if none match. */
+    String relevant(String question) {
+        Set<String> words = new HashSet<>();
+        for (String w : question.toLowerCase(Locale.ROOT).split("[^a-z0-9]+")) if (w.length() >= 3 && !STOP.contains(w)) words.add(w.length() > 5 ? w.substring(0, 5) : w);
+        if (words.isEmpty()) return guide;
+        record Scored(Section s, int score) {}
+        List<Scored> scored = new ArrayList<>();
+        for (Section sec : sections) {
+            String title = sec.title().toLowerCase(Locale.ROOT), body = sec.body().toLowerCase(Locale.ROOT);
+            int sc = 0;
+            for (String w : words) { if (title.contains(w)) sc += 5; if (body.contains(w)) sc += 1; }
+            scored.add(new Scored(sec, sc));
+        }
+        scored.sort((a, b) -> b.score() - a.score());
+        if (scored.get(0).score() == 0) return guide;
+        StringBuilder b = new StringBuilder("# Prosperr Sales CRM: guide for BDRs (the sections that matter for this question)\n\n");
+        Set<String> used = new HashSet<>();
+        for (Scored x : scored.subList(0, Math.min(6, scored.size()))) if (x.score() > 0 && used.add(x.s().title()))
+            b.append("## ").append(x.s().title()).append("\nPage: ").append(x.s().page()).append("\n").append(x.s().body()).append("\n\n");
+        sections.stream().filter(x -> x.title().equals("Common problems") && used.add(x.title()))
+                .forEach(x -> b.append("## ").append(x.title()).append("\nPage: ").append(x.page()).append("\n").append(x.body()).append("\n\n"));
+        return b.toString();
+    }
+
+    String system(String currentPage, String language, String guideText) {
         return """
                 You are "Ask Prosperr", the help assistant inside Prosperr's sales CRM, talking to a BDR. Answer questions about how to
                 use the CRM: where things are, what a button or rule does, why something happens, and how to do a task step by step.
@@ -126,7 +162,7 @@ public class HelpChatService {
 
                 GUIDE:
                 %s""".formatted(language, String.join(", ", PAGES.entrySet().stream().map(e -> "[" + e.getKey() + "](" + e.getValue() + ")").toList()),
-                currentPage == null || currentPage.isBlank() ? "/" : currentPage, guide);
+                currentPage == null || currentPage.isBlank() ? "/" : currentPage, guideText);
     }
 
     Answer finish(String raw, String engine) {

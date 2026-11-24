@@ -40,5 +40,17 @@ class HelpChatTest {
         assertTrue(HelpChatService.language("why is my sequence paused?").startsWith("English"));
         assertTrue(HelpChatService.language("मेरा sequence pause क्यों हो गया?").startsWith("Hindi"));
         assertEquals("Tamil", HelpChatService.language("SQL எப்படி சமர்ப்பிப்பது?"));
+        assertTrue(HelpChatService.language("event qr kaise use karu booth pe?").startsWith("Hinglish"));
+        assertEquals("English", HelpChatService.language("how do I import leads?"));
+    }
+
+    @Test
+    void groqGetsOnlyTheRelevantSections() throws Exception {
+        HelpChatService h = new HelpChatService(new GroqClient("", "m", new com.fasterxml.jackson.databind.ObjectMapper()), null, null);
+        String g = h.relevant("why is my email sequence paused?");
+        assertTrue(g.contains("## Email sequences"));
+        assertTrue(g.contains("## Common problems"));
+        assertTrue(g.length() < 9000, "much smaller than the whole guide: " + g.length());
+        assertTrue(h.relevant("नमस्ते").contains("## Event QR"), "no English words: the whole guide");
     }
 }
