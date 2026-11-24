@@ -134,7 +134,7 @@ public class DashboardService {
                 + " FROM (SELECT gs::date AS d FROM generate_series(:tfrom::date, :tto::date - 1, interval '1 day') gs) g)";
     }
 
-    private List<Map<String, Object>> bdrRows(UUID bdrId, LocalDate[] r, boolean wholePeriod) {
+    List<Map<String, Object>> bdrRows(UUID bdrId, LocalDate[] r, boolean wholePeriod) {
         LocalDate[] tw = wholePeriod ? targetWindow(r) : r;
         var params = new MapSqlParameterSource().addValue("from", r[0]).addValue("to", r[1]).addValue("uid", bdrId)
                 .addValue("tfrom", tw[0]).addValue("tto", tw[1]);

@@ -24,12 +24,14 @@ import java.util.UUID;
 @RequestMapping("/api")
 public class ReportingController {
     private final DashboardService dashboards;
+    private final com.prosperr.crm.reporting.application.BdrInsightsService insights;
     private final ReportService reports;
     private final TargetService targets;
     private final CurrentUser current;
 
-    public ReportingController(DashboardService dashboards, ReportService reports, TargetService targets, CurrentUser current) {
-        this.dashboards = dashboards; this.reports = reports; this.targets = targets; this.current = current;
+    public ReportingController(DashboardService dashboards, com.prosperr.crm.reporting.application.BdrInsightsService insights,
+                               ReportService reports, TargetService targets, CurrentUser current) {
+        this.dashboards = dashboards; this.insights = insights; this.reports = reports; this.targets = targets; this.current = current;
     }
 
     /** Own data for BDR / AE; leadership may pass a user id ("Performance reports: Own / Own / All"). */
@@ -81,6 +83,12 @@ public class ReportingController {
                                             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
                                             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
         return dashboards.myScoreboard(self(bdrId, Role.BDR), dashboards.range(preset, from, to));
+    }
+
+    /** A BDR's own book of leads (managers pass bdrId to see anyone's). */
+    @GetMapping("/dashboards/bdr/leads")
+    public Map<String, Object> myLeads(@RequestParam(required = false) UUID bdrId) {
+        return insights.leads(self(bdrId, Role.BDR));
     }
 
     @GetMapping("/dashboards/leadership")

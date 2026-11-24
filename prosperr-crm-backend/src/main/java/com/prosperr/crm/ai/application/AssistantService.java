@@ -26,10 +26,12 @@ public class AssistantService {
     private final CallNoteService quota;
     private final JdbcTemplate jdbc;
     private final Clock clock;
+    private final com.prosperr.crm.reporting.api.PerformanceApi performance;
     private final Map<String, Reply> briefCache = new ConcurrentHashMap<>();
 
-    public AssistantService(SarvamClient sarvam, CallNoteService quota, JdbcTemplate jdbc, Clock clock) {
-        this.sarvam = sarvam; this.quota = quota; this.jdbc = jdbc; this.clock = clock;
+    public AssistantService(SarvamClient sarvam, CallNoteService quota, JdbcTemplate jdbc, Clock clock,
+                            com.prosperr.crm.reporting.api.PerformanceApi performance) {
+        this.sarvam = sarvam; this.quota = quota; this.jdbc = jdbc; this.clock = clock; this.performance = performance;
     }
 
     public record Reply(String question, String text, String language, String audioBase64, Map<String, Object> facts, Instant at) {}
@@ -160,8 +162,156 @@ public class AssistantService {
         return r;
     }
 
+    // ------------------------------------------------------------------ performance coach (Home)
+
+    /**
+     * A spoken review of the BDR's results for the chosen period: against target and pace, compared with the team, what is
+     * going well and the two or three things to improve, each with a concrete action. Every number and every piece of advice
+     * comes from {@link #coachPoints}; the AI only says it naturally in the BDR's language.
+     */
+    public Reply coach(UUID userId, String language, String preset, LocalDate from, LocalDate to, boolean refresh) {
+        String lang = LANGUAGE_NAMES.containsKey(language) ? language : "en-IN";
+        String key = "coach|" + userId + "|" + lang + "|" + preset + "|" + from + "|" + to;
+        Reply cached = briefCache.get(key);
+        if (!refresh && cached != null && cached.at().isAfter(clock.instant().minus(Duration.ofMinutes(15)))) return cached;
+        Map<String, Object> f = performance.performance(userId, preset, from, to);
+        List<String> pts = coachPoints(f);
+        String text;
+        if (sarvam.enabled()) {
+            quota.checkQuota(userId);
+            text = clean(sarvam.chat(system(lang) + """
+
+                    You are now the BDR's performance coach. Turn the points below into a spoken review of about 120 to 170 words:
+                    a short greeting by first name, the results against target, the "Going well" points, then the "To improve"
+                    points with their actions, and end with the single focus for this week. Use only these points and their
+                    numbers; add no other advice, praise, people, companies or numbers. If there is no "Going well" point, do not
+                    praise anything except what the results say. Be warm and direct, like a good team lead.""",
+                    "Points:\n" + String.join("\n", pts), 1100));
+        } else {
+            text = String.join(" ", pts.stream().map(x -> x.replaceFirst("^[A-Za-z ]+: ", "")).toList());
+        }
+        Reply r = new Reply(null, text, lang, audio(text, lang), f, clock.instant());
+        briefCache.put(key, r);
+        return r;
+    }
+
+    /** The coach's review as plain English points, from the numbers only. */
+    @SuppressWarnings("unchecked")
+    static List<String> coachPoints(Map<String, Object> f) {
+        List<String> p = new ArrayList<>();
+        Map<String, Object> period = (Map<String, Object>) f.get("period");
+        Map<String, Object> me = (Map<String, Object>) f.get("me");
+        Map<String, Object> calls = (Map<String, Object>) f.get("calls");
+        Map<String, Object> avg = (Map<String, Object>) f.get("teamAverage");
+        Map<String, Object> sql = (Map<String, Object>) f.get("sql");
+        Map<String, Object> now = (Map<String, Object>) f.get("now");
+        boolean running = Boolean.TRUE.equals(period.get("running"));
+        double share = num(period.get("shareElapsed"));
+        long daysLeft = (long) num(period.get("workingDaysLeft"));
+        p.add("Name: " + f.get("bdr") + ".");
+        p.add("Period: " + day(period.get("from")) + " to " + day(period.get("to")) + (running ? ", still running: " + Math.round(share * 100)
+                + "% of it has gone, " + daysLeft + " working day" + (daysLeft == 1 ? "" : "s") + " left." : ", finished."));
+
+        boolean behind = false;
+        for (String[] m : new String[][]{{"l1Booked", "L1 meetings booked"}, {"l1Done", "L1 meetings done"}, {"l3Done", "L3 meetings done"}}) {
+            long a = (long) num(me.get(m[0]));
+            double t = num(me.get(m[0] + "Target"));
+            if (t < 0.5) { if (a > 0) p.add("Result: " + a + " " + m[1] + " (no target set)."); continue; }
+            long target = Math.round(t);
+            if (a >= target) { p.add("Result: " + m[1] + ": " + a + " against a target of " + target + ". Target reached."); continue; }
+            long left = target - a;
+            if (running) {
+                long expected = Math.round(t * share);
+                boolean ahead = a >= expected;
+                behind |= !ahead;
+                p.add("Result: " + m[1] + ": " + a + " of " + target + (ahead ? ", on or ahead of pace" : ", behind pace (about " + expected + " expected by now)")
+                        + ". " + left + " more needed" + (daysLeft > 0 ? " in " + daysLeft + " working days, about " + perDay(left, daysLeft) : "") + ".");
+            } else {
+                behind = true;
+                p.add("Result: " + m[1] + ": " + a + " of " + target + " (" + Math.round(100.0 * a / t) + "% of target).");
+            }
+        }
+        long rank = (long) num(f.get("rankByL1Done")), ranked = (long) num(f.get("bdrsRanked"));
+        if (ranked > 1 && num(me.get("l1Done")) > 0) p.add("Result: rank " + rank + " of " + ranked + " BDRs by L1 meetings done in this period.");
+
+        List<String> good = new ArrayList<>(), fix = new ArrayList<>();
+        long c = (long) num(calls.get("calls"));
+        Double perDayMe = dbl(calls.get("callsPerDay")), perDayTeam = dbl(avg.get("callsPerDay"));
+        Double rate = dbl(calls.get("connectRate")), rateTeam = dbl(avg.get("connectRate"));
+        Double cpl = dbl(calls.get("connectsPerL1")), cplTeam = dbl(avg.get("connectsPerL1"));
+        long overdue = (long) num(now.get("overdueFollowUps"));
+        if (overdue > 0) fix.add("To improve: " + overdue + " follow-up" + (overdue == 1 ? " is" : "s are") + " overdue right now. Action: clear them first; these are people who asked you to call back.");
+        if (c == 0) {
+            fix.add("To improve: no calls were logged in this period. Action: log every call in the CRM, even unanswered ones, so your numbers count.");
+        } else if (c < 30) {
+            fix.add("To improve: only " + c + " calls were logged in this period, too few to compare with the team. Action: log every call, even unanswered ones, so the coach can see where calls are lost.");
+        } else {
+            if (perDayTeam != null && perDayMe < 0.8 * perDayTeam)
+                fix.add("To improve: you made " + fmt(perDayMe) + " calls a working day; the team average is " + fmt(perDayTeam) + ". Action: aim for at least " + Math.round(Math.ceil(perDayTeam)) + " a day.");
+            else if (perDayTeam != null && perDayMe >= 1.2 * perDayTeam)
+                good.add("Going well: " + fmt(perDayMe) + " calls a working day, above the team average of " + fmt(perDayTeam) + ".");
+            if (rate != null && rateTeam != null && rate <= rateTeam - 5) {
+                StringBuilder b = new StringBuilder("To improve: " + Math.round(rate) + "% of your calls became a conversation; the team gets " + Math.round(rateTeam) + "%.");
+                List<Map<String, Object>> hours = (List<Map<String, Object>>) f.get("hours");
+                if (hours != null && !hours.isEmpty() && num(hours.get(0).get("connectRate")) >= rate + 5)
+                    b.append(" Action: your best hour is ").append(hour(hours.get(0).get("hour"))).append(", when ").append(Math.round(num(hours.get(0).get("connectRate"))))
+                            .append("% of your calls connect; keep that hour for calling.");
+                else b.append(" Action: try calling at different times of day.");
+                Double na = dbl(calls.get("noAnswerShare"));
+                if (na != null && na >= 60) b.append(" Most calls go unanswered (").append(Math.round(na)).append("%): for people who don't pick up, send a WhatsApp or start an email sequence.");
+                fix.add(b.toString());
+            } else if (rate != null && rateTeam != null && rate >= rateTeam + 5) {
+                good.add("Going well: " + Math.round(rate) + "% of your calls became a conversation, above the team's " + Math.round(rateTeam) + "%.");
+            }
+            if (cpl != null && cplTeam != null && cpl > 1.3 * cplTeam)
+                fix.add("To improve: it took you " + fmt(cpl) + " conversations to book one L1; the team needs " + fmt(cplTeam) + ". Action: when someone shows interest, ask for the meeting on the same call.");
+            else if (cpl != null && cplTeam != null && cpl < 0.8 * cplTeam)
+                good.add("Going well: you book an L1 every " + fmt(cpl) + " conversations; the team needs " + fmt(cplTeam) + ".");
+            Double senior = dbl(calls.get("seniorShare"));
+            if (senior != null && c >= 20 && senior < 35)
+                fix.add("To improve: only " + Math.round(senior) + "% of your calls were to L1 or L2 decision makers (CXOs, VPs, heads, directors). Action: ask the people you reach to refer you to their CFO or HR head.");
+        }
+        long submitted = (long) num(sql.get("submitted")), approved = (long) num(sql.get("approved")), rejected = (long) num(sql.get("rejected"));
+        if (rejected > 0) fix.add("To improve: " + rejected + " of your " + submitted + " SQLs were rejected" + (sql.get("topRejection") == null ? "." : ", most often for: " + sql.get("topRejection") + ".")
+                + " Action: check the four SQL checks before submitting.");
+        else if (submitted >= 3 && approved * 10 >= submitted * 8) good.add("Going well: " + approved + " of " + submitted + " SQLs approved.");
+        long noShows = (long) num(f.get("noShows"));
+        if (noShows > 0) fix.add("To improve: " + noShows + " booked L1" + (noShows == 1 ? " was a no-show" : "s were no-shows") + ". Action: confirm on WhatsApp the day before.");
+        long never = (long) num(now.get("neverCalled")), stale = (long) num(now.get("staleAccounts"));
+        if (never >= 10) fix.add("To improve: " + never + " of your contacts have never been called. Action: work the New leads list in My Day, most senior first.");
+        if (stale >= 10) fix.add("To improve: " + stale + " of your companies have had no touch in 30 days. Action: open My leads to see which ones matter most.");
+        if (good.isEmpty() && !behind && c > 0) good.add("Going well: you are on pace with your targets.");
+        p.addAll(good.subList(0, Math.min(2, good.size())));
+        p.addAll(fix.subList(0, Math.min(3, fix.size())));
+        if (!fix.isEmpty()) p.add("Focus this week: " + fix.get(0).replaceFirst("^.*Action: ", "").replaceFirst("\\.$", "") + ".");
+        else p.add("Focus this week: keep the same rhythm.");
+        return p;
+    }
+
+    private static String day(Object isoDate) {
+        try { return LocalDate.parse(String.valueOf(isoDate)).format(DateTimeFormatter.ofPattern("d MMM yyyy", Locale.ENGLISH)); }
+        catch (RuntimeException e) { return String.valueOf(isoDate); }
+    }
+
+    private static String perDay(long left, long days) {
+        double perDay = (double) left / days;
+        return perDay >= 1 ? fmt(Math.round(perDay * 10) / 10.0) + " a day" : fmt(Math.round(perDay * 5 * 10) / 10.0) + " a week";
+    }
+
+    private static String hour(Object h) {
+        int x = (int) num(h);
+        return (x % 12 == 0 ? 12 : x % 12) + (x < 12 ? " am" : " pm") + " to " + ((x + 1) % 12 == 0 ? 12 : (x + 1) % 12) + (x + 1 < 12 ? " am" : " pm");
+    }
+
+    private static double num(Object o) { return o instanceof Number n ? n.doubleValue() : 0; }
+    private static Double dbl(Object o) { return o instanceof Number n ? n.doubleValue() : null; }
+    private static String fmt(double v) { return v == Math.rint(v) ? String.valueOf((long) v) : String.valueOf(v); }
+
     /** A question by voice (WAV) or text; answered from the BDR's own CRM data, in the language they spoke. */
-    public Reply ask(UUID userId, byte[] wav, String typed, String language) {
+    public Reply ask(UUID userId, byte[] wav, String typed, String language) { return ask(userId, wav, typed, language, null); }
+
+    /** With mode "coach" (on Home) the answer can also use the performance review for the last 30 days. */
+    public Reply ask(UUID userId, byte[] wav, String typed, String language, String mode) {
         if (!sarvam.enabled()) throw new DomainException("AI_DISABLED", "The voice assistant needs the AI key on this server.");
         quota.checkQuota(userId);
         String question = typed;
@@ -184,6 +334,7 @@ public class AssistantService {
                 cannot change anything; if asked to, say which screen to use.""",
                 "Today's points:\n" + String.join("\n", points(f)) + "\n\nCall list (in order):\n" + String.join("\n", callList(f))
                         + "\n\nCRM data (empty sections left out):\n" + spoken(f) + (companies.isEmpty() ? "" : "\nCompanies mentioned:\n" + companies)
+                        + ("coach".equals(mode) ? "\n\nPerformance review, last 30 days:\n" + String.join("\n", coachPoints(performance.performance(userId, "30", null, null))) : "")
                         + "\n\nQuestion: \"" + CallNoteService.redact(question) + "\"", 700));
         return new Reply(question, text, lang, audio(text, lang), f, clock.instant());
     }
@@ -195,7 +346,7 @@ public class AssistantService {
         return "You are the voice assistant inside Prosperr's sales CRM, talking to a BDR (business development rep) who books "
                 + "first meetings (L1) with CFOs and HR heads for Prosperr's flexible benefits plan. Reply in " + name
                 + (lang.equals("en-IN") ? "" : ", written in " + name + " script, keeping company names, people's names and words like L1, SQL, "
-                + "follow-up and sequence in English") + ". Speak naturally, like a helpful colleague: short sentences, no markdown, no "
+                + "follow-up and sequence in English") + ". Always say L1, L2, L3 and SQL exactly like that, never as 'first meeting' or similar. Speak naturally, like a helpful colleague: short sentences, no markdown, no "
                 + "bullet symbols, no emojis, no headings. Never invent people, companies or numbers that are not in the data. Never say "
                 + "field names from the data (like overdueCount); say what they mean. An L1 is a first meeting, not a call. If a section is missing from the data, don't mention it.";
     }

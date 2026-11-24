@@ -38,15 +38,26 @@ public class AiController {
     }
 
     /** Ask the assistant by voice (16 kHz WAV); it answers in the language spoken. Read-only. */
+    /** Spoken performance review for the period picked on Home (BDRs). */
+    @GetMapping("/assistant/coach")
+    @org.springframework.security.access.prepost.PreAuthorize("hasRole('BDR')")
+    public AssistantService.Reply coach(@RequestParam(defaultValue = "en-IN") String lang, @RequestParam(required = false) String preset,
+                                        @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate from,
+                                        @RequestParam(required = false) @org.springframework.format.annotation.DateTimeFormat(iso = org.springframework.format.annotation.DateTimeFormat.ISO.DATE) java.time.LocalDate to,
+                                        @RequestParam(defaultValue = "false") boolean refresh) {
+        return assistant.coach(current.get().userId(), lang, preset, from, to, refresh);
+    }
+
     @PostMapping(value = "/assistant/ask", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public AssistantService.Reply askAudio(@RequestPart("audio") MultipartFile audio, @RequestParam(required = false) String lang) throws IOException {
-        return assistant.ask(current.get().userId(), audio.getBytes(), null, lang);
+    public AssistantService.Reply askAudio(@RequestPart("audio") MultipartFile audio, @RequestParam(required = false) String lang,
+                                           @RequestParam(required = false) String mode) throws IOException {
+        return assistant.ask(current.get().userId(), audio.getBytes(), null, lang, mode);
     }
 
     /** Ask the assistant by typing. */
     @PostMapping(value = "/assistant/ask", consumes = MediaType.APPLICATION_JSON_VALUE)
     public AssistantService.Reply askText(@RequestBody Map<String, String> body) {
-        return assistant.ask(current.get().userId(), null, body.get("text"), body.get("lang"));
+        return assistant.ask(current.get().userId(), null, body.get("text"), body.get("lang"), body.get("mode"));
     }
 
     /** Lets the UI hide AI buttons when the server has no key. */
