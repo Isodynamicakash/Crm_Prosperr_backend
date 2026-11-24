@@ -21,13 +21,13 @@ CHECK = {
     "city": lambda t, g: norm(t) == norm(g),
     "linkedin": lambda t, g: li(t) == li(g),
 }
-rows, per = [], {k: [0, 0] for k in CHECK}
+rows, per, CHECKS = [], {k: [0, 0] for k in CHECK}, {}
 for cid in sorted(truth):
     t0 = time.time()
     out = subprocess.run(["curl", "-s", "-m", "90", "-X", "POST", f"{B}/api/ai/card", "-H", f"Authorization: Bearer {TOK}",
                           "-F", f"image=@{os.path.join(D, cid + '.png')};type=image/png"], capture_output=True, text=True).stdout
     secs = time.time() - t0
-    try: got = json.loads(out)["card"]; conf = json.loads(out)["confidence"]
+    try: got = json.loads(out)["card"]; conf = json.loads(out)["confidence"]; CHECKS[cid] = json.loads(out).get("checks", [])
     except Exception: rows.append((cid, secs, None, out[:200])); continue
     misses = []
     for k, ok in CHECK.items():
@@ -42,3 +42,4 @@ print(f"Cards: {len(rows)} · fully correct: {perfect}/{len(rows)} · fields cor
 for k, (a, n) in per.items(): print(f"  {k:12} {a}/{n}  ({100*a/n:.0f}%)")
 for cid, secs, misses, err in rows:
     print(f"- {cid} ({secs:.1f}s): " + ("ERROR " + err if err else "all correct" if not misses else "; ".join(misses)))
+    for c in CHECKS.get(cid, []): print(f"      check: {c}")

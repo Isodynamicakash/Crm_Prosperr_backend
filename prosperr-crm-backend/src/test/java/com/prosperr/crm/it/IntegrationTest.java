@@ -81,7 +81,7 @@ public abstract class IntegrationTest {
     private final Map<UUID, String> tokenCache = new HashMap<>();
 
     static final String[] TRANSACTIONAL_TABLES = {"import_row", "import_job", "notification", "target", "audit_log",
-            "temperature_history", "account_status_history", "stage_history", "assignment_history", "task", "activity",
+            "lead_capture", "lead_qr", "temperature_history", "account_status_history", "stage_history", "assignment_history", "task", "activity",
             "email_message", "sequence_enrollment", "opportunity_checklist", "attachment", "meeting_attendee", "meeting",
             "qualification_correction", "sql_criterion_result", "sql_submission", "opportunity", "stakeholder_phone",
             "stakeholder_email", "stakeholder", "account_bdr", "account", "saved_view", "user_mailbox"};

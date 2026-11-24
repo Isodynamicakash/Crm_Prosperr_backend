@@ -2,6 +2,7 @@ package com.prosperr.crm.notification.application;
 
 import com.prosperr.crm.account.api.StakeholderEngagementChanged;
 import com.prosperr.crm.assignment.api.AccountAssigned;
+import com.prosperr.crm.leadcapture.api.LeadCaptured;
 import com.prosperr.crm.lifecycle.api.LifecycleEvents;
 import com.prosperr.crm.outreach.api.OutreachEvents;
 import com.prosperr.crm.qualification.api.SqlRejected;
@@ -50,6 +51,21 @@ public class NotificationListener {
             n.notify(List.of(e.previousOwnerId()), "ACCOUNT_REASSIGNED", "Reassigned: " + name, "This account moved to another owner",
                     "account", e.accountId());
         }
+    }
+
+    @EventListener
+    public void leadCaptured(LeadCaptured e) {
+        String title = switch (e.outcome()) {
+            case "EXISTING" -> "Met again at " + e.eventName() + ": " + e.personName();
+            case "REVIEW" -> "QR lead to check: " + e.personName();
+            default -> "New lead from " + e.eventName() + ": " + e.personName();
+        };
+        String body = switch (e.outcome()) {
+            case "EXISTING" -> e.company() + ". Already in the CRM: a follow-up task was added.";
+            case "REVIEW" -> e.company() + ". Could not be added automatically. Open Event QR to add it.";
+            default -> e.company() + ". Added to your accounts with a follow-up task for tomorrow.";
+        };
+        n.notify(List.of(e.ownerId()), "LEAD_CAPTURED", title, body, e.accountId() == null ? null : "account", e.accountId());
     }
 
     @EventListener
