@@ -151,6 +151,40 @@ public class BdrInsightsService implements PerformanceApi {
         return out;
     }
 
+    // ------------------------------------------------------------------ which kind of company converts
+
+    static final Map<String, String> DIMENSIONS = Map.of(
+            "industry", "coalesce(ind.label, 'Not set')",
+            "city", "coalesce(c.name, 'Not set')",
+            "size", "CASE a.size_bucket_code WHEN 'SMALL' THEN 'Small (≤250)' WHEN 'MEDIUM' THEN 'Medium (251–500)' WHEN 'LARGE' THEN 'Large (501–1,000)'"
+                    + " WHEN 'ENTERPRISE' THEN 'Enterprise (1,000+)' ELSE 'Licences not set' END",
+            "source", "coalesce(src.label, 'Not set')");
+
+    /**
+     * Companies grouped by industry, city, size or lead source, split by how far they got: prospect, SQL, L1 done,
+     * L2 and beyond, won, lost. Mine = companies this BDR works; team = every company in the CRM.
+     */
+    public List<Map<String, Object>> breakdown(UUID bdrId, String dimension, boolean team) {
+        String dim = DIMENSIONS.getOrDefault(dimension, DIMENSIONS.get("industry"));
+        return jdbc.queryForList("""
+                SELECT %s AS label, count(*) AS total,
+                       count(*) FILTER (WHERE a.lifecycle_stage = 'PROSPECT') AS prospect,
+                       count(*) FILTER (WHERE a.lifecycle_stage = 'SQL') AS sql,
+                       count(*) FILTER (WHERE a.lifecycle_stage IN ('L1','MULTITHREADING')) AS l1,
+                       count(*) FILTER (WHERE a.lifecycle_stage IN ('L2','L3','NEGOTIATION')) AS later,
+                       count(*) FILTER (WHERE a.lifecycle_stage IN ('WON','IMPLEMENTATION')) AS won,
+                       count(*) FILTER (WHERE a.lifecycle_stage = 'LOST') AS lost,
+                       round(100.0 * count(*) FILTER (WHERE a.lifecycle_stage <> 'PROSPECT') / count(*)) AS "reachedSql",
+                       round(100.0 * count(*) FILTER (WHERE a.lifecycle_stage NOT IN ('PROSPECT','SQL')) / count(*)) AS "reachedL1"
+                  FROM crm.account a
+                  LEFT JOIN crm.picklist_value ind ON ind.id = a.industry_id
+                  LEFT JOIN crm.picklist_value src ON src.id = a.lead_source_id
+                  LEFT JOIN crm.city c ON c.id = a.city_id
+                 WHERE %s
+                 GROUP BY 1 ORDER BY count(*) DESC""".formatted(dim, team ? "true" : MY_ACCOUNTS),
+                new MapSqlParameterSource("u", bdrId));
+    }
+
     // ------------------------------------------------------------------ the list of a BDR's own leads
 
     static final Set<String> SORTS = Set.of("recent", "senior", "followUp", "company");

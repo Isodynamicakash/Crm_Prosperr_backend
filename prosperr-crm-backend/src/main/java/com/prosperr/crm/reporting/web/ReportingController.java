@@ -93,6 +93,14 @@ public class ReportingController {
         return insights.leads(self(bdrId, Role.BDR), dashboards.range(preset, from, to));
     }
 
+    /** Companies by industry / city / size / source and how far they got; scope=team covers every company. */
+    @GetMapping("/dashboards/bdr/leads/breakdown")
+    public List<Map<String, Object>> leadBreakdown(@RequestParam(required = false) UUID bdrId, @RequestParam(defaultValue = "industry") String by,
+                                                   @RequestParam(defaultValue = "mine") String scope) {
+        UUID id = "team".equals(scope) && current.get().isLeadership() && bdrId == null ? current.get().userId() : self(bdrId, Role.BDR);
+        return insights.breakdown(id, by, "team".equals(scope));
+    }
+
     /** The BDR's own contacts: search, status, level, sort; touched=true keeps only people worked in the period. */
     @GetMapping("/dashboards/bdr/leads/list")
     public Map<String, Object> myLeadList(@RequestParam(required = false) UUID bdrId, @RequestParam(required = false) String q,
