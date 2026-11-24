@@ -126,7 +126,15 @@ public class SarvamClient {
     private JsonNode send(HttpRequest req) {
         if (!enabled()) throw new DomainException("AI_DISABLED", "AI is not set up on this server.");
         try {
-            HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<byte[]> raw = http.send(req, HttpResponse.BodyHandlers.ofByteArray());
+            byte[] bytes = raw.body();
+            if (bytes.length > 2 && (bytes[0] & 0xff) == 0x1f && (bytes[1] & 0xff) == 0x8b) {          // gzip, sent even unasked
+                try (var in = new java.util.zip.GZIPInputStream(new java.io.ByteArrayInputStream(bytes))) { bytes = in.readAllBytes(); }
+            }
+            final String text = new String(bytes, StandardCharsets.UTF_8);
+            final int code = raw.statusCode();
+            record Res(int statusCode, String body) {}
+            Res res = new Res(code, text);
             if (res.statusCode() / 100 != 2) {
                 log.warn("Sarvam {} returned {}: {}", req.uri().getPath(), res.statusCode(), abbreviate(res.body()));
                 throw new DomainException("AI_UNAVAILABLE", "The AI service could not process this. Fill the form by hand.");
@@ -139,6 +147,48 @@ public class SarvamClient {
             Thread.currentThread().interrupt();
             throw new DomainException("AI_UNAVAILABLE", "The AI request was interrupted.");
         }
+    }
+
+
+    public record Extraction(JsonNode result, JsonNode annotations) {}
+
+    /**
+     * Sarvam Vision field extraction from one image or PDF (Document AI "extract" job): create the job with a JSON
+     * schema, poll its status, then read the result. A visiting card takes about 4 seconds. Results come gzip-compressed.
+     */
+    public Extraction extract(byte[] file, String filename, String contentType, String schemaJson) {
+        String boundary = "----crm" + UUID.randomUUID();
+        var body = new ByteArrayOutputStream();
+        try {
+            part(body, boundary, "schema", schemaJson);
+            part(body, boundary, "output_format", "json");
+            part(body, boundary, "mode", "basic");
+            body.write(("--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"" + filename.replaceAll("[^A-Za-z0-9._-]", "_")
+                    + "\"\r\nContent-Type: " + contentType + "\r\n\r\n").getBytes(StandardCharsets.UTF_8));
+            body.write(file);
+            body.write(("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8));
+        } catch (IOException e) { throw new IllegalStateException(e); }
+        JsonNode job = send(HttpRequest.newBuilder(URI.create(base() + "/doc-ai/v1/job/extract")).timeout(Duration.ofSeconds(45))
+                .header("api-subscription-key", cfg.sarvamApiKey()).header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body.toByteArray())).build());
+        String id = job.path("job_id").asText("");
+        if (id.isEmpty()) throw new DomainException("AI_UNAVAILABLE", "The card could not be read. Fill the form by hand.");
+        long deadline = System.currentTimeMillis() + 60_000;
+        String status = job.path("status").asText("pending");
+        while (!java.util.Set.of("completed", "partially_completed", "failed", "rejected").contains(status)) {
+            if (System.currentTimeMillis() > deadline) throw new DomainException("AI_UNAVAILABLE", "Reading the card took too long. Try again.");
+            try { Thread.sleep(1200); } catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new DomainException("AI_UNAVAILABLE", "Interrupted"); }
+            status = send(get("/doc-ai/v1/job/" + id + "/status")).path("status").asText("");
+        }
+        if (!status.startsWith("completed") && !status.equals("partially_completed"))
+            throw new DomainException("AI_UNAVAILABLE", "The card could not be read (" + status + "). Try a clearer photo.");
+        JsonNode res = send(get("/doc-ai/v1/job/" + id + "/results"));
+        return new Extraction(res.path("result"), res.path("annotations"));
+    }
+
+    private HttpRequest get(String path) {
+        return HttpRequest.newBuilder(URI.create(base() + path)).timeout(Duration.ofSeconds(30))
+                .header("api-subscription-key", cfg.sarvamApiKey()).header("Accept-Encoding", "gzip").GET().build();
     }
 
     private static void part(ByteArrayOutputStream out, String boundary, String name, String value) throws IOException {

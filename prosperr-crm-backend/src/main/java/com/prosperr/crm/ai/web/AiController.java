@@ -2,6 +2,7 @@ package com.prosperr.crm.ai.web;
 
 import com.prosperr.crm.ai.application.AssistantService;
 import com.prosperr.crm.ai.application.CallNoteService;
+import com.prosperr.crm.ai.application.CardScanService;
 import com.prosperr.crm.ai.application.FormFillService;
 import com.prosperr.crm.shared.security.CurrentUser;
 import org.springframework.http.MediaType;
@@ -17,10 +18,17 @@ public class AiController {
     private final CallNoteService callNotes;
     private final FormFillService forms;
     private final AssistantService assistant;
+    private final CardScanService cards;
     private final CurrentUser current;
 
-    public AiController(CallNoteService callNotes, FormFillService forms, AssistantService assistant, CurrentUser current) {
-        this.callNotes = callNotes; this.forms = forms; this.assistant = assistant; this.current = current;
+    public AiController(CallNoteService callNotes, FormFillService forms, AssistantService assistant, CardScanService cards, CurrentUser current) {
+        this.callNotes = callNotes; this.forms = forms; this.assistant = assistant; this.cards = cards; this.current = current;
+    }
+
+    /** Visiting card photo (JPG/PNG) to contact fields, with confidence and duplicate matches. Saves nothing. */
+    @PostMapping(value = "/card", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public Map<String, Object> scanCard(@RequestPart("image") MultipartFile image) throws IOException {
+        return cards.scan(current.get().userId(), image.getBytes(), image.getOriginalFilename(), image.getContentType());
     }
 
     /** The BDR's spoken morning brief (text + WAV audio as base64) in the chosen language, e.g. hi-IN. Read-only. */
