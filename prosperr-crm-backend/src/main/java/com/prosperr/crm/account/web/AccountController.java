@@ -73,6 +73,20 @@ public class AccountController {
         return ResponseEntity.ok(queries.list(f, current.get(), page, Math.min(size, 500), sort));
     }
 
+    /** Who manages the visible accounts (name, role, count), for the "Managed by" filter. Same filters as the list. */
+    @GetMapping("/accounts/owners")
+    public List<Map<String, Object>> owners(@RequestParam(required = false) String status,
+                                            @RequestParam(required = false) List<String> stage,
+                                            @RequestParam(required = false) String zone,
+                                            @RequestParam(required = false) UUID cityId,
+                                            @RequestParam(required = false) String sizeBucket,
+                                            @RequestParam(required = false) String temperature,
+                                            @RequestParam(required = false) Boolean flagged) {
+        AccountFilter f = new AccountFilter(null, status, stage, zone, null, null, cityId, sizeBucket, null, temperature,
+                flagged, null, null);
+        return queries.owners(f, current.get());
+    }
+
     @GetMapping("/accounts/{id}")
     public Map<String, Object> page(@PathVariable UUID id) { return queries.page(id, current.get()); }
 

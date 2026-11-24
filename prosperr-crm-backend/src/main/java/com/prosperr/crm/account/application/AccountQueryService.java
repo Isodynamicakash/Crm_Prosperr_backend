@@ -58,6 +58,34 @@ public class AccountQueryService {
         return new Page(items, total == null ? 0 : total, page, size);
     }
 
+    /**
+     * People who manage the accounts this viewer can see, with how many each one has: AEs by {@code ae_owner_id},
+     * BDRs through {@code account_bdr} (sourcer or contributor). Uses the same visibility and filters as the list,
+     * so the counts match what the list shows when you pick that person.
+     */
+    public List<Map<String, Object>> owners(AccountFilter f, Actor viewer) {
+        MapSqlParameterSource p = new MapSqlParameterSource();
+        String where = f.where(viewer, p);
+        String sql = """
+            WITH vis AS (SELECT a.id, a.ae_owner_id, a.visibility_zone FROM crm.account a""" + where + """
+            )
+            SELECT * FROM (
+              SELECT u.id AS "userId", u.full_name AS "name", u.role AS "role", u.is_active AS "active",
+                     'AE' AS "ownsAs", count(*) AS "accounts",
+                     count(*) FILTER (WHERE v.visibility_zone = 'PIPELINE') AS "pipeline"
+                FROM vis v JOIN crm.app_user u ON u.id = v.ae_owner_id
+               GROUP BY u.id, u.full_name, u.role, u.is_active
+              UNION ALL
+              SELECT u.id, u.full_name, u.role, u.is_active, 'BDR', count(DISTINCT v.id),
+                     count(DISTINCT v.id) FILTER (WHERE v.visibility_zone = 'PIPELINE')
+                FROM vis v JOIN crm.account_bdr ab ON ab.account_id = v.id JOIN crm.app_user u ON u.id = ab.bdr_id
+               GROUP BY u.id, u.full_name, u.role, u.is_active
+            ) o
+            ORDER BY CASE "ownsAs" WHEN 'AE' THEN 0 ELSE 1 END, "accounts" DESC, "name"
+            """;
+        return jdbc.queryForList(sql, p);
+    }
+
     /** M1-6: global search by account, person, email, phone or LinkedIn, respecting visibility. */
     public Map<String, List<Map<String, Object>>> search(String q, Actor viewer) {
         if (q == null || q.isBlank()) return Map.of("accounts", List.of(), "stakeholders", List.of());
