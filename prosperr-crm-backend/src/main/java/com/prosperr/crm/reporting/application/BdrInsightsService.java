@@ -31,7 +31,10 @@ public class BdrInsightsService implements PerformanceApi {
 
     // ------------------------------------------------------------------ My leads page
 
-    public Map<String, Object> leads(UUID bdrId) {
+    public Map<String, Object> leads(UUID bdrId) { return leads(bdrId, dashboards.range("30", null, null)); }
+
+    /** The page for one BDR: "right now" (funnel, stages, mix, attention) plus what happened in the chosen period. */
+    public Map<String, Object> leads(UUID bdrId, LocalDate[] r) {
         LocalDate today = LocalDate.now(clock.withZone(Ist.ZONE));
         var p = new MapSqlParameterSource().addValue("u", bdrId).addValue("connects", DashboardService.CONNECT_CODES)
                 .addValue("since", java.sql.Timestamp.from(today.minusWeeks(11).with(DayOfWeek.MONDAY).atStartOfDay(Ist.ZONE).toInstant()))
@@ -93,6 +96,96 @@ public class BdrInsightsService implements PerformanceApi {
                  WHERE %s AND a.account_status = 'ACTIVE' AND a.visibility_zone = 'PROSPECTING' AND coalesce(a.last_activity_at, a.created_at) < :stale
                  ORDER BY (a.intent_rating = 'HIGH') DESC NULLS LAST, (c.icp_priority = 'P0' AND coalesce(a.license_potential, 0) > 250) DESC NULLS LAST,
                           coalesce(a.license_potential, 0) DESC, coalesce(a.last_activity_at, a.created_at) LIMIT 8""".formatted(MY_ACCOUNTS), p));
+        m.put("period", period(bdrId, r));
+        return m;
+    }
+
+    /** What the BDR did in [from, to): totals against target, a trend (daily, weekly or monthly by length) and the call outcomes. */
+    Map<String, Object> period(UUID bdrId, LocalDate[] r) {
+        long days = ChronoUnit.DAYS.between(r[0], r[1]);
+        String bucket = days <= 45 ? "day" : days <= 200 ? "week" : "month";
+        var p = new MapSqlParameterSource().addValue("u", bdrId).addValue("from", r[0]).addValue("to", r[1])
+                .addValue("connects", DashboardService.CONNECT_CODES);
+        String d = "(%s AT TIME ZONE 'Asia/Kolkata')::date";
+        String in = " AND " + d + " >= :from AND " + d + " < :to";
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("from", r[0]);
+        out.put("to", r[1].minusDays(1));
+        out.put("bucket", bucket);
+        Map<String, Object> k = new LinkedHashMap<>(jdbc.queryForMap("""
+                SELECT (SELECT count(*) FROM crm.stakeholder s WHERE s.bdr_owner_id = :u%1$s) AS "newContacts",
+                       (SELECT count(*) FROM crm.activity x WHERE x.type = 'CALL' AND x.logged_by = :u%2$s) AS calls,
+                       (SELECT count(*) FROM crm.activity x JOIN crm.picklist_value pv ON pv.id = x.call_outcome_id
+                         WHERE x.type = 'CALL' AND x.logged_by = :u AND pv.code IN (:connects)%2$s) AS connects,
+                       (SELECT count(DISTINCT x.account_id) FROM crm.activity x WHERE x.logged_by = :u%2$s) AS "companiesTouched",
+                       (SELECT count(*) FROM crm.email_message e WHERE e.sender_user_id = :u AND e.direction = 'OUTBOUND'%3$s) AS "emailsSent",
+                       (SELECT count(*) FROM crm.sql_submission q WHERE q.submitted_by = :u%4$s) AS "sqlsSubmitted",
+                       (SELECT count(*) FROM crm.sql_submission q WHERE q.submitted_by = :u AND q.status = 'QUALIFIED_SQL'%4$s) AS "sqlsApproved"
+                """.formatted(in.formatted("s.created_at", "s.created_at"), in.formatted("x.occurred_at", "x.occurred_at"),
+                        in.formatted("e.sent_at", "e.sent_at"), in.formatted("q.submitted_at", "q.submitted_at")), p));
+        List<Map<String, Object>> rows = dashboards.bdrRows(bdrId, r, true);
+        if (!rows.isEmpty()) for (String key : List.of("l1Booked", "l1Done", "l2Done", "l3Done", "l1BookedTarget", "l1DoneTarget", "l3DoneTarget"))
+            k.put(key, rows.get(0).get(key));
+        out.put("kpis", k);
+        String b = "date_trunc('" + bucket + "', t.d)::date";
+        out.put("trend", jdbc.queryForList("""
+                WITH g AS (SELECT DISTINCT %1$s AS b FROM generate_series(CAST(:from AS date), CAST(:to AS date) - 1, interval '1 day') AS t(d))
+                SELECT to_char(g.b, 'YYYY-MM-DD') AS start,
+                       (SELECT count(*) FROM crm.activity x WHERE x.type = 'CALL' AND x.logged_by = :u
+                           AND date_trunc('%2$s', (x.occurred_at AT TIME ZONE 'Asia/Kolkata'))::date = g.b%3$s) AS calls,
+                       (SELECT count(*) FROM crm.activity x JOIN crm.picklist_value pv ON pv.id = x.call_outcome_id WHERE x.type = 'CALL' AND x.logged_by = :u
+                           AND pv.code IN (:connects) AND date_trunc('%2$s', (x.occurred_at AT TIME ZONE 'Asia/Kolkata'))::date = g.b%3$s) AS connects,
+                       (SELECT count(*) FROM crm.meeting mt JOIN crm.account a ON a.id = mt.account_id WHERE mt.level = 'L1' AND mt.rescheduled_from_id IS NULL
+                           AND (mt.booked_by = :u OR a.sql_credit_bdr_id = :u) AND date_trunc('%2$s', (mt.booked_on AT TIME ZONE 'Asia/Kolkata'))::date = g.b
+                           %4$s) AS "l1Booked",
+                       (SELECT count(*) FROM crm.meeting mt JOIN crm.account a ON a.id = mt.account_id WHERE mt.level = 'L1' AND mt.status = 'COMPLETED'
+                           AND (mt.booked_by = :u OR a.sql_credit_bdr_id = :u) AND date_trunc('%2$s', (mt.scheduled_start AT TIME ZONE 'Asia/Kolkata'))::date = g.b
+                           %5$s) AS "l1Done"
+                  FROM g ORDER BY g.b""".formatted(b, bucket,
+                        in.formatted("x.occurred_at", "x.occurred_at"), in.formatted("mt.booked_on", "mt.booked_on"),
+                        in.formatted("mt.scheduled_start", "mt.scheduled_start")), p));
+        out.put("outcomes", jdbc.queryForList("""
+                SELECT pv.label AS outcome, count(*) AS count, (pv.code IN (:connects)) AS connect
+                  FROM crm.activity x JOIN crm.picklist_value pv ON pv.id = x.call_outcome_id
+                 WHERE x.type = 'CALL' AND x.logged_by = :u""" + in.formatted("x.occurred_at", "x.occurred_at") + " GROUP BY pv.label, pv.code ORDER BY 2 DESC", p));
+        return out;
+    }
+
+    // ------------------------------------------------------------------ the list of a BDR's own leads
+
+    static final Set<String> SORTS = Set.of("recent", "senior", "followUp", "company");
+
+    /** Contacts the BDR owns, searchable and filterable; touchedIn limits to people worked in the period. */
+    public Map<String, Object> leadList(UUID bdrId, String q, String status, Integer level, String sort, LocalDate[] touchedIn, int page, int size) {
+        var p = new MapSqlParameterSource().addValue("u", bdrId).addValue("lim", Math.min(Math.max(size, 1), 100)).addValue("off", Math.max(page, 0) * Math.min(Math.max(size, 1), 100));
+        StringBuilder where = new StringBuilder(" WHERE s.bdr_owner_id = :u");
+        if (q != null && !q.isBlank()) {
+            where.append(" AND (lower(s.first_name || ' ' || coalesce(s.last_name, '')) LIKE :q OR a.name_normalized LIKE :q OR lower(coalesce(s.designation, '')) LIKE :q)");
+            p.addValue("q", "%" + q.trim().toLowerCase(Locale.ROOT) + "%");
+        }
+        if (status != null && !status.isBlank()) { where.append(" AND s.engagement_status = :st"); p.addValue("st", status); }
+        if (level != null) { where.append(" AND s.level = :lv"); p.addValue("lv", level); }
+        if (touchedIn != null) {
+            where.append(" AND EXISTS (SELECT 1 FROM crm.activity x WHERE x.stakeholder_id = s.id AND x.logged_by = :u"
+                    + " AND (x.occurred_at AT TIME ZONE 'Asia/Kolkata')::date >= :tf AND (x.occurred_at AT TIME ZONE 'Asia/Kolkata')::date < :tt)");
+            p.addValue("tf", touchedIn[0]).addValue("tt", touchedIn[1]);
+        }
+        String order = switch (sort == null || !SORTS.contains(sort) ? "recent" : sort) {
+            case "senior" -> "s.level NULLS LAST, a.name";
+            case "followUp" -> "\"nextFollowUp\" NULLS LAST, a.name";
+            case "company" -> "a.name, s.level NULLS LAST";
+            default -> "coalesce(s.last_interaction_at, s.created_at) DESC";
+        };
+        String from = " FROM crm.stakeholder s JOIN crm.account a ON a.id = s.account_id LEFT JOIN crm.city c ON c.id = a.city_id" + where;
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("total", jdbc.queryForObject("SELECT count(*)" + from, p, Long.class));
+        m.put("items", jdbc.queryForList("""
+                SELECT s.id, s.first_name || coalesce(' ' || s.last_name, '') AS name, s.designation, s.level, s.department,
+                       s.engagement_status AS status, s.call_attempts AS "callAttempts", s.do_not_contact AS "doNotContact",
+                       a.id AS "accountId", a.name AS company, a.lifecycle_stage AS stage, c.name AS city,
+                       coalesce(s.last_interaction_at, NULL) AS "lastTouch",
+                       (SELECT min(t.due_at) FROM crm.task t WHERE t.stakeholder_id = s.id AND t.status = 'OPEN') AS "nextFollowUp"
+                """ + from + " ORDER BY " + order + " LIMIT :lim OFFSET :off", p));
         return m;
     }
 

@@ -87,8 +87,22 @@ public class ReportingController {
 
     /** A BDR's own book of leads (managers pass bdrId to see anyone's). */
     @GetMapping("/dashboards/bdr/leads")
-    public Map<String, Object> myLeads(@RequestParam(required = false) UUID bdrId) {
-        return insights.leads(self(bdrId, Role.BDR));
+    public Map<String, Object> myLeads(@RequestParam(required = false) UUID bdrId, @RequestParam(required = false) String preset,
+                                       @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+                                       @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        return insights.leads(self(bdrId, Role.BDR), dashboards.range(preset, from, to));
+    }
+
+    /** The BDR's own contacts: search, status, level, sort; touched=true keeps only people worked in the period. */
+    @GetMapping("/dashboards/bdr/leads/list")
+    public Map<String, Object> myLeadList(@RequestParam(required = false) UUID bdrId, @RequestParam(required = false) String q,
+                                          @RequestParam(required = false) String status, @RequestParam(required = false) Integer level,
+                                          @RequestParam(required = false) String sort, @RequestParam(defaultValue = "false") boolean touched,
+                                          @RequestParam(required = false) String preset,
+                                          @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+                                          @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+                                          @RequestParam(defaultValue = "0") int page, @RequestParam(defaultValue = "25") int size) {
+        return insights.leadList(self(bdrId, Role.BDR), q, status, level, sort, touched ? dashboards.range(preset, from, to) : null, page, size);
     }
 
     @GetMapping("/dashboards/leadership")
