@@ -80,14 +80,37 @@ public class SarvamClient {
     }
 
     /** One chat completion at temperature 0; returns the assistant's text. */
-    public String chat(String system, String user) {
+    public String chat(String system, String user) { return chat(system, user, 600); }
+
+    /** Languages Sarvam's voice (bulbul:v3) can speak. */
+    public static final java.util.Set<String> VOICE_LANGUAGES = java.util.Set.of("en-IN", "hi-IN", "bn-IN", "ta-IN", "te-IN", "kn-IN",
+            "ml-IN", "mr-IN", "gu-IN", "pa-IN", "od-IN");
+
+    /** Text to speech with bulbul:v3; returns WAV bytes. Text over the model's limit is cut at the last sentence that fits. */
+    public byte[] speak(String text, String languageCode) {
+        String lang = VOICE_LANGUAGES.contains(languageCode) ? languageCode : "en-IN";
+        String t = text.length() <= 2400 ? text : text.substring(0, Math.max(text.lastIndexOf('.', 2400), 1200) + 1);
+        try {
+            String payload = json.writeValueAsString(Map.of("text", t, "target_language_code", lang, "model", "bulbul:v3"));
+            var req = HttpRequest.newBuilder(URI.create(base() + "/text-to-speech"))
+                    .timeout(Duration.ofSeconds(45))
+                    .header("api-subscription-key", cfg.sarvamApiKey())
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(payload)).build();
+            String b64 = send(req).path("audios").path(0).asText("");
+            if (b64.isEmpty()) throw new DomainException("AI_UNAVAILABLE", "The voice could not be generated.");
+            return java.util.Base64.getDecoder().decode(b64);
+        } catch (IOException e) { throw new IllegalStateException(e); }
+    }
+
+    public String chat(String system, String user, int maxTokens) {
         try {
             // sarvam-105b is a reasoning model; with reasoning on it can spend its whole budget thinking and return
             // no answer. Extraction needs none, and with it off a reply takes about a second.
             var body = new java.util.LinkedHashMap<String, Object>();
             body.put("model", chatModel());
             body.put("temperature", 0);
-            body.put("max_tokens", 600);
+            body.put("max_tokens", maxTokens);
             body.put("reasoning_effort", null);
             body.put("messages", List.of(Map.of("role", "system", "content", system), Map.of("role", "user", "content", user)));
             String payload = json.writeValueAsString(body);

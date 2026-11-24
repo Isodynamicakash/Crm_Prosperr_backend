@@ -1,5 +1,6 @@
 package com.prosperr.crm.ai.web;
 
+import com.prosperr.crm.ai.application.AssistantService;
 import com.prosperr.crm.ai.application.CallNoteService;
 import com.prosperr.crm.ai.application.FormFillService;
 import com.prosperr.crm.shared.security.CurrentUser;
@@ -15,10 +16,29 @@ import java.util.Map;
 public class AiController {
     private final CallNoteService callNotes;
     private final FormFillService forms;
+    private final AssistantService assistant;
     private final CurrentUser current;
 
-    public AiController(CallNoteService callNotes, FormFillService forms, CurrentUser current) {
-        this.callNotes = callNotes; this.forms = forms; this.current = current;
+    public AiController(CallNoteService callNotes, FormFillService forms, AssistantService assistant, CurrentUser current) {
+        this.callNotes = callNotes; this.forms = forms; this.assistant = assistant; this.current = current;
+    }
+
+    /** The BDR's spoken morning brief (text + WAV audio as base64) in the chosen language, e.g. hi-IN. Read-only. */
+    @GetMapping("/assistant/brief")
+    public AssistantService.Reply brief(@RequestParam(defaultValue = "en-IN") String lang, @RequestParam(defaultValue = "false") boolean refresh) {
+        return assistant.brief(current.get().userId(), lang, refresh);
+    }
+
+    /** Ask the assistant by voice (16 kHz WAV); it answers in the language spoken. Read-only. */
+    @PostMapping(value = "/assistant/ask", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public AssistantService.Reply askAudio(@RequestPart("audio") MultipartFile audio, @RequestParam(required = false) String lang) throws IOException {
+        return assistant.ask(current.get().userId(), audio.getBytes(), null, lang);
+    }
+
+    /** Ask the assistant by typing. */
+    @PostMapping(value = "/assistant/ask", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public AssistantService.Reply askText(@RequestBody Map<String, String> body) {
+        return assistant.ask(current.get().userId(), null, body.get("text"), body.get("lang"));
     }
 
     /** Lets the UI hide AI buttons when the server has no key. */
