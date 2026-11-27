@@ -38,11 +38,18 @@ public class TargetService {
         };
     }
 
+    /** BDRs are measured only on calls and L1 meetings booked. */
+    public static final Set<TargetMetric> BDR_METRICS = EnumSet.of(TargetMetric.CALLS, TargetMetric.L1_BOOKED);
+
     public record SetTarget(UUID userId, PeriodType periodType, LocalDate periodDate, TargetMetric metric, BigDecimal value) {}
 
     @Transactional
     public void set(SetTarget t, UUID by) {
         if (t.value() == null || t.value().signum() < 0) throw new DomainException("TARGET_VALUE", "Target must be zero or more");
+        String role = jdbc.query("SELECT role FROM crm.app_user WHERE id = :u", Map.of("u", t.userId()), (rs, i) -> rs.getString(1))
+                .stream().findFirst().orElse(null);
+        if ("BDR".equals(role) && !BDR_METRICS.contains(t.metric()))
+            throw new DomainException("TARGET_METRIC_NOT_FOR_BDR", "BDR targets can only be Calls or L1 booked");
         jdbc.update("""
                 INSERT INTO crm.target (user_id, period_type, period_start, metric, target_value, set_by)
                 VALUES (:u, :p, :s, :m, :v, :by)
@@ -57,6 +64,9 @@ public class TargetService {
     public BigDecimal actual(UUID userId, TargetMetric metric, LocalDate from, LocalDate to) {
         MapSqlParameterSource p = new MapSqlParameterSource().addValue("u", userId).addValue("from", from).addValue("to", to);
         String sql = switch (metric) {
+            case CALLS -> """
+                    SELECT count(*) FROM crm.activity WHERE type = 'CALL' AND logged_by = :u
+                       AND (occurred_at AT TIME ZONE 'Asia/Kolkata')::date >= :from AND (occurred_at AT TIME ZONE 'Asia/Kolkata')::date < :to""";
             case L1_BOOKED -> """
                     SELECT count(*) FROM crm.meeting WHERE level = 'L1' AND booked_by = :u AND rescheduled_from_id IS NULL
                        AND (booked_on AT TIME ZONE 'Asia/Kolkata')::date >= :from AND (booked_on AT TIME ZONE 'Asia/Kolkata')::date < :to""";

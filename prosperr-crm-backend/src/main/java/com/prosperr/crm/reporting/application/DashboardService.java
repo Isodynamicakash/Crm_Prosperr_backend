@@ -152,6 +152,7 @@ public class DashboardService {
                 + meetings("L3", "COMPLETED", "scheduled_start") + " AS \"l3Done\", "
                 + "(SELECT count(*) FROM crm.activity act WHERE act.type = 'CALL' AND act.logged_by = u.id"
                 + " AND act.occurred_at >= :from AND act.occurred_at < :to" + dated("act.occurred_at") + ") AS \"calls\", "
+                + target("CALLS") + " AS \"callsTarget\", "
                 + target("L1_BOOKED") + " AS \"l1BookedTarget\", "
                 + target("L1_DONE") + " AS \"l1DoneTarget\", "
                 + target("L2_DONE") + " AS \"l2DoneTarget\", "
@@ -198,16 +199,16 @@ public class DashboardService {
                   (SELECT count(*) FROM crm.stage_history sh JOIN crm.account a ON a.id = sh.account_id
                      WHERE sh.to_stage = 'WON' AND %8$s = d.day AND %9$s) AS "wins"
                   FROM d ORDER BY d.day""".formatted(
-                        day.formatted("act.occurred_at"), mine.formatted("act.logged_by = :u"),
-                        day.formatted("s.submitted_at"), mine.formatted("s.submitted_by = :u"),
-                        day.formatted("mt.booked_on"), mine.formatted("(mt.booked_by = :u OR mt.ae_id = :u)"),
-                        day.formatted("mt.outcome_recorded_at"), day.formatted("sh.changed_at"), accountScope), p));
+                day.formatted("act.occurred_at"), mine.formatted("act.logged_by = :u"),
+                day.formatted("s.submitted_at"), mine.formatted("s.submitted_by = :u"),
+                day.formatted("mt.booked_on"), mine.formatted("(mt.booked_by = :u OR mt.ae_id = :u)"),
+                day.formatted("mt.outcome_recorded_at"), day.formatted("sh.changed_at"), accountScope), p));
         m.put("outcomeMix", jdbc.queryForList("""
                 SELECT pv.label AS "outcome", pv.code, count(*) AS "count", (pv.code IN (:connects)) AS "connect"
                   FROM crm.activity act JOIN crm.picklist_value pv ON pv.id = act.call_outcome_id
                  WHERE act.type = 'CALL' AND %s >= :from AND %s < :to AND %s AND %s <> DATE '2026-01-01'
                  GROUP BY pv.label, pv.code ORDER BY count(*) DESC""".formatted(
-                        day.formatted("act.occurred_at"), day.formatted("act.occurred_at"), mine.formatted("act.logged_by = :u"), day.formatted("act.occurred_at")), p));
+                day.formatted("act.occurred_at"), day.formatted("act.occurred_at"), mine.formatted("act.logged_by = :u"), day.formatted("act.occurred_at")), p));
         m.put("stageMix", jdbc.queryForList("""
                 SELECT a.lifecycle_stage AS "stage", count(*) AS "count",
                        coalesce(sum(o.expected_mrr), 0) AS "mrr"

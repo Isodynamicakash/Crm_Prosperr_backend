@@ -122,9 +122,9 @@ public class BdrInsightsService implements PerformanceApi {
                        (SELECT count(*) FROM crm.sql_submission q WHERE q.submitted_by = :u%4$s) AS "sqlsSubmitted",
                        (SELECT count(*) FROM crm.sql_submission q WHERE q.submitted_by = :u AND q.status = 'QUALIFIED_SQL'%4$s) AS "sqlsApproved"
                 """.formatted(in.formatted("s.created_at", "s.created_at"), in.formatted("x.occurred_at", "x.occurred_at"),
-                        in.formatted("e.sent_at", "e.sent_at"), in.formatted("q.submitted_at", "q.submitted_at")), p));
+                in.formatted("e.sent_at", "e.sent_at"), in.formatted("q.submitted_at", "q.submitted_at")), p));
         List<Map<String, Object>> rows = dashboards.bdrRows(bdrId, r, true);
-        if (!rows.isEmpty()) for (String key : List.of("l1Booked", "l1Done", "l2Done", "l3Done", "l1BookedTarget", "l1DoneTarget", "l3DoneTarget"))
+        if (!rows.isEmpty()) for (String key : List.of("l1Booked", "l1Done", "l2Done", "l3Done", "callsTarget", "l1BookedTarget", "l1DoneTarget", "l3DoneTarget"))
             k.put(key, rows.get(0).get(key));
         out.put("kpis", k);
         out.put("undatedCalls", jdbc.queryForObject("SELECT count(*) FROM crm.activity x WHERE x.type = 'CALL' AND x.logged_by = :u AND (x.occurred_at AT TIME ZONE 'Asia/Kolkata')::date = "
@@ -144,8 +144,8 @@ public class BdrInsightsService implements PerformanceApi {
                            AND (mt.booked_by = :u OR a.sql_credit_bdr_id = :u) AND date_trunc('%2$s', (mt.scheduled_start AT TIME ZONE 'Asia/Kolkata'))::date = g.b
                            %5$s) AS "l1Done"
                   FROM g ORDER BY g.b""".formatted(b, bucket,
-                        in.formatted("x.occurred_at", "x.occurred_at"), in.formatted("mt.booked_on", "mt.booked_on"),
-                        in.formatted("mt.scheduled_start", "mt.scheduled_start")), p));
+                in.formatted("x.occurred_at", "x.occurred_at"), in.formatted("mt.booked_on", "mt.booked_on"),
+                in.formatted("mt.scheduled_start", "mt.scheduled_start")), p));
         out.put("outcomes", jdbc.queryForList("""
                 SELECT pv.label AS outcome, count(*) AS count, (pv.code IN (:connects)) AS connect
                   FROM crm.activity x JOIN crm.picklist_value pv ON pv.id = x.call_outcome_id
