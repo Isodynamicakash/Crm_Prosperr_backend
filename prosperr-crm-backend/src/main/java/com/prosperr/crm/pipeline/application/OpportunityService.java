@@ -57,12 +57,12 @@ public class OpportunityService {
                 SELECT id, account_id, stage, stage_entered_at, temperature, expected_mrr, license_count, stagnation_reason_id,
                        stagnation_note, next_step, next_step_due, expected_close_date, closed_at, lost_reason_id, outcome_note,
                        implementation_started_at, version FROM crm.opportunity WHERE id = :id""", Map.of("id", id),
-                (rs, i) -> new Opp(Db.uuid(rs, "id"), Db.uuid(rs, "account_id"), LifecycleStage.valueOf(rs.getString("stage")),
-                        Db.instant(rs, "stage_entered_at"), Db.enumOf(Temperature.class, rs.getString("temperature")),
-                        rs.getBigDecimal("expected_mrr"), Db.integer(rs, "license_count"), Db.uuid(rs, "stagnation_reason_id"),
-                        rs.getString("stagnation_note"), rs.getString("next_step"), Db.date(rs, "next_step_due"),
-                        Db.date(rs, "expected_close_date"), Db.instant(rs, "closed_at"), Db.uuid(rs, "lost_reason_id"),
-                        rs.getString("outcome_note"), Db.instant(rs, "implementation_started_at"), rs.getInt("version")))
+                        (rs, i) -> new Opp(Db.uuid(rs, "id"), Db.uuid(rs, "account_id"), LifecycleStage.valueOf(rs.getString("stage")),
+                                Db.instant(rs, "stage_entered_at"), Db.enumOf(Temperature.class, rs.getString("temperature")),
+                                rs.getBigDecimal("expected_mrr"), Db.integer(rs, "license_count"), Db.uuid(rs, "stagnation_reason_id"),
+                                rs.getString("stagnation_note"), rs.getString("next_step"), Db.date(rs, "next_step_due"),
+                                Db.date(rs, "expected_close_date"), Db.instant(rs, "closed_at"), Db.uuid(rs, "lost_reason_id"),
+                                rs.getString("outcome_note"), Db.instant(rs, "implementation_started_at"), rs.getInt("version")))
                 .stream().findFirst().orElseThrow(() -> new NotFoundException("Opportunity", id));
     }
 
@@ -143,7 +143,15 @@ public class OpportunityService {
                 WHERE id = :id""",
                 new MapSqlParameterSource().addValue("lr", m.lostReasonId()).addValue("note", m.note())
                         .addValue("t", m.target().name()).addValue("id", id));
-        writeStage(o, m.target(), actor.userId());
+        if (m.target() == LifecycleStage.L2 || m.target() == LifecycleStage.L3) {
+            // step through each stage so L1 → L3 still records L2 in the stage history and reports
+            for (LifecycleStage s : List.of(LifecycleStage.L2, LifecycleStage.L3)) {
+                Opp cur = load(id);
+                if (s.rank() > cur.stage().rank() && s.rank() <= m.target().rank()) writeStage(cur, s, actor.userId());
+            }
+        } else {
+            writeStage(o, m.target(), actor.userId());
+        }
         if (m.target() == LifecycleStage.LOST) {
             // A lost deal has no upcoming meetings; cancelling them also removes the calendar invites.
             List<UUID> cancelled = jdbc.queryForList(
@@ -212,9 +220,6 @@ public class OpportunityService {
         guard.require(actor, Action.UPDATE_MEETINGS, o.accountId());
         ConfigApi.ChecklistItem item = config.checklistItems().stream().filter(i -> i.id().equals(itemId)).findFirst()
                 .orElseThrow(() -> new NotFoundException("Checklist item", itemId));
-        if (t.done() && item.requiresAttachment() && t.attachmentId() == null) {
-            throw new DomainException("ATTACHMENT_REQUIRED", "'" + item.label() + "' needs the file or link attached");
-        }
         jdbc.update("""
                 INSERT INTO crm.opportunity_checklist (opportunity_id, checklist_item_id, is_done, done_at, done_by, attachment_id, note)
                 VALUES (:o, :i, :d, CASE WHEN :d THEN now() END, CASE WHEN :d THEN CAST(:by AS uuid) END, :att, :note)
