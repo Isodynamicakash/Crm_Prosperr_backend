@@ -67,7 +67,14 @@ public class SqlService {
 
     public record SubmitSql(UUID qualifyingStakeholderId, UUID referringStakeholderId, BusinessRelevance businessRelevance,
                             Bant bant, String smallExceptionReason, IntentRating intentRating, String intentReason,
-                            L1Booking l1) {}
+                            L1Booking l1, Boolean highIntentOverride) {
+        /** BDR passes the SQL on high intent, skipping the ICP rules, as long as they say why. */
+        boolean override() { return Boolean.TRUE.equals(highIntentOverride); }
+        boolean overrideReady() { return override() && intentReason != null && !intentReason.isBlank(); }
+    }
+
+    /** With a high-intent override only what the SQL and the L1 booking physically need stays mandatory. */
+    private static final Set<String> NEEDED_FOR_OVERRIDE = Set.of("qualifyingStakeholder", "businessRelevance", "l1Booking");
 
     public record Checklist(List<CriterionResult> criteria, List<String> missingFields, boolean canSubmit,
                             boolean needsApproval, Integer stakeholderLevel, ConnectionType connectionType) {}
@@ -121,7 +128,9 @@ public class SqlService {
         QualificationEngine.Result r = engine.evaluate(
                 input(f, small, req.smallExceptionReason(), false, intent, intentReason, false, req.bant()), activeRules());
         List<String> missing = missingFields(f, req);
-        return new Checklist(r.results(), missing, r.canSubmit() && missing.isEmpty(), r.needsApproval(),
+        if (req.override()) missing = missing.stream().filter(NEEDED_FOR_OVERRIDE::contains).toList();
+        boolean can = req.overrideReady() ? missing.isEmpty() : r.canSubmit() && missing.isEmpty();
+        return new Checklist(r.results(), missing, can, req.overrideReady() || r.needsApproval(),
                 f.stakeholder() == null ? null : f.stakeholder().level(), f.stakeholder() == null ? null : f.stakeholder().connectionType());
     }
 
@@ -147,18 +156,22 @@ public class SqlService {
         if (open != null && open > 0) throw new DomainException("SQL_ALREADY_OPEN", "This account already has an SQL waiting for validation");
 
         Facts f = facts(accountId, req.qualifyingStakeholderId(), req.referringStakeholderId());
+        boolean override = req.override();
+        if (override && !req.overrideReady()) throw new DomainException("INTENT_REASON_REQUIRED", "Write why this is high intent");
         List<String> missing = missingFields(f, req);
+        if (override) missing = missing.stream().filter(NEEDED_FOR_OVERRIDE::contains).toList();
         if (!missing.isEmpty()) throw new DomainException("SQL_MISSING_FIELDS", "Missing: " + String.join(", ", missing));
-        if (req.intentRating() != null) accounts.setIntent(accountId, req.intentRating(), req.intentReason());
-        IntentRating intent = req.intentRating() != null ? req.intentRating() : f.account().intentRating();
+        IntentRating requested = override ? IntentRating.HIGH : req.intentRating();
+        if (requested != null) accounts.setIntent(accountId, requested, req.intentReason());
+        IntentRating intent = requested != null ? requested : f.account().intentRating();
         String intentReason = req.intentReason() != null ? req.intentReason() : f.account().intentReason();
         boolean small = f.account().sizeBucket() == SizeBucket.SMALL;
-        if (small && (req.smallExceptionReason() == null || req.smallExceptionReason().isBlank())) {
+        if (!override && small && (req.smallExceptionReason() == null || req.smallExceptionReason().isBlank())) {
             throw new DomainException("SMALL_REASON_REQUIRED", "A Small account can be submitted only with a reason");
         }
         QualificationEngine.Result r = engine.evaluate(
                 input(f, small, req.smallExceptionReason(), false, intent, intentReason, false, req.bant()), activeRules());
-        if (!r.canSubmit()) {
+        if (!override && !r.canSubmit()) {
             String why = r.results().stream().filter(x -> !x.passed()).map(x -> x.code() + ": " + x.detail())
                     .reduce((a, b) -> a + "; " + b).orElse("");
             throw new DomainException("SQL_CRITERIA_FAILED", why);
@@ -167,15 +180,15 @@ public class SqlService {
         UUID referrer = f.referrer() == null ? null : f.referrer().id();
         Short attempt = jdbc.queryForObject("SELECT coalesce(max(attempt_no), 0) + 1 FROM crm.sql_submission WHERE account_id = :a",
                 Map.of("a", accountId), Short.class);
-        Bant b = req.bant();
+        Bant b = req.bant() == null ? new Bant(null, null, null, null, null, null, null, null) : req.bant();
         UUID id = jdbc.queryForObject("""
                 INSERT INTO crm.sql_submission (account_id, attempt_no, status, submitted_by, submitted_at, qualifying_stakeholder_id,
                   referring_stakeholder_id, connection_type, license_potential, size_bucket_code, city_id, location_priority,
                   business_relevance, intent_rating, intent_reason, is_small_exception, small_exception_reason,
                   bant_budget_id, bant_budget_note, bant_authority_id, bant_authority_note, bant_need_id, bant_need_note,
-                  bant_timeline_id, bant_timeline_note)
+                  bant_timeline_id, bant_timeline_note, high_intent_override)
                 VALUES (:a, :n, 'MEETING_BOOKED', :by, :now, :s, :ref, :ct, :lic, :bucket, :city, :prio, :rel, :intent,
-                  :intentReason, :small, :smallReason, :bb, :bbn, :ba, :ban, :bn, :bnn, :bt, :btn) RETURNING id""",
+                  :intentReason, :small, :smallReason, :bb, :bbn, :ba, :ban, :bn, :bnn, :bt, :btn, :override) RETURNING id""",
                 new MapSqlParameterSource().addValue("a", accountId).addValue("n", attempt).addValue("by", actor.userId())
                         .addValue("now", Db.ts(Instant.now(clock)))
                         .addValue("s", s.id()).addValue("ref", referrer).addValue("ct", Db.name(s.connectionType()))
@@ -186,7 +199,7 @@ public class SqlService {
                         .addValue("smallReason", req.smallExceptionReason())
                         .addValue("bb", b.budgetId()).addValue("bbn", b.budgetNote()).addValue("ba", b.authorityId())
                         .addValue("ban", b.authorityNote()).addValue("bn", b.needId()).addValue("bnn", b.needNote())
-                        .addValue("bt", b.timelineId()).addValue("btn", b.timelineNote()), UUID.class);
+                        .addValue("bt", b.timelineId()).addValue("btn", b.timelineNote()).addValue("override", override), UUID.class);
         saveCriteria(id, r);
 
         // M4-4: booking the L1 is part of submission; the account enters the shared pipeline zone at this moment
@@ -198,8 +211,10 @@ public class SqlService {
         accounts.enterPipeline(accountId, Instant.now(clock));
         accounts.setSqlCredit(accountId, s.bdrOwnerId() != null ? s.bdrOwnerId() : actor.userId());
         audit.record("sql_submission", id, AuditApi.Action.CREATE, "status", null, "MEETING_BOOKED", actor.userId());
+        if (override) audit.record("sql_submission", id, AuditApi.Action.UPDATE, "high_intent_override", null, intentReason, actor.userId());
         events.publishEvent(new SqlSubmitted(id, accountId, actor.userId()));
-        return Map.of("submissionId", id, "meetingId", meetingId, "criteria", r.results(), "needsApproval", r.needsApproval());
+        return Map.of("submissionId", id, "meetingId", meetingId, "criteria", r.results(), "needsApproval", override || r.needsApproval(),
+                "highIntentOverride", override);
     }
 
     void saveCriteria(UUID submissionId, QualificationEngine.Result r) {
@@ -217,20 +232,20 @@ public class SqlService {
 
     record Snapshot(UUID id, UUID accountId, String status, UUID submittedBy, UUID stakeholderId, UUID referrerId,
                     boolean smallException, String smallReason, IntentRating intent, String intentReason,
-                    UUID bb, UUID ba, UUID bn, UUID bt) {}
+                    UUID bb, UUID ba, UUID bn, UUID bt, boolean highIntentOverride) {}
 
     Snapshot snapshot(UUID id) {
         return jdbc.query("""
                 SELECT id, account_id, status, submitted_by, qualifying_stakeholder_id, referring_stakeholder_id,
                        is_small_exception, small_exception_reason, intent_rating, intent_reason,
-                       bant_budget_id, bant_authority_id, bant_need_id, bant_timeline_id
+                       bant_budget_id, bant_authority_id, bant_need_id, bant_timeline_id, high_intent_override
                   FROM crm.sql_submission WHERE id = :id""", Map.of("id", id),
-                (rs, i) -> new Snapshot(Db.uuid(rs, "id"), Db.uuid(rs, "account_id"), rs.getString("status"),
-                        Db.uuid(rs, "submitted_by"), Db.uuid(rs, "qualifying_stakeholder_id"), Db.uuid(rs, "referring_stakeholder_id"),
-                        rs.getBoolean("is_small_exception"), rs.getString("small_exception_reason"),
-                        Db.enumOf(IntentRating.class, rs.getString("intent_rating")), rs.getString("intent_reason"),
-                        Db.uuid(rs, "bant_budget_id"), Db.uuid(rs, "bant_authority_id"), Db.uuid(rs, "bant_need_id"),
-                        Db.uuid(rs, "bant_timeline_id"))).stream().findFirst()
+                        (rs, i) -> new Snapshot(Db.uuid(rs, "id"), Db.uuid(rs, "account_id"), rs.getString("status"),
+                                Db.uuid(rs, "submitted_by"), Db.uuid(rs, "qualifying_stakeholder_id"), Db.uuid(rs, "referring_stakeholder_id"),
+                                rs.getBoolean("is_small_exception"), rs.getString("small_exception_reason"),
+                                Db.enumOf(IntentRating.class, rs.getString("intent_rating")), rs.getString("intent_reason"),
+                                Db.uuid(rs, "bant_budget_id"), Db.uuid(rs, "bant_authority_id"), Db.uuid(rs, "bant_need_id"),
+                                Db.uuid(rs, "bant_timeline_id"), rs.getBoolean("high_intent_override"))).stream().findFirst()
                 .orElseThrow(() -> new NotFoundException("SQL submission", id));
     }
 
@@ -266,7 +281,7 @@ public class SqlService {
         Bant b = new Bant(sn.bb(), null, sn.ba(), null, sn.bn(), null, sn.bt(), null);
         QualificationEngine.Result r = engine.evaluate(input(f, sn.smallException(), sn.smallReason(), v.approveSmall(),
                 sn.intent(), sn.intentReason(), v.confirmIntent(), b), activeRules());
-        if (!r.fullyQualified()) {
+        if (!sn.highIntentOverride() && !r.fullyQualified()) {   // override SQLs: the manager's approval is the check
             String why = r.results().stream().filter(x -> x.status() != CriterionStatus.PASS)
                     .map(x -> x.code() + ": " + x.detail()).reduce((a, c) -> a + "; " + c).orElse("");
             throw new DomainException("SQL_NOT_QUALIFIED", why);
@@ -351,7 +366,7 @@ public class SqlService {
                        s.connection_type AS "connectionType", st.first_name || coalesce(' ' || st.last_name, '') AS "qualifyingStakeholder",
                        st.level AS "qualifyingLevel", rf.first_name || coalesce(' ' || rf.last_name, '') AS "referredBy",
                        rf.level AS "referrerLevel", s.validated_at AS "validatedAt", v.full_name AS "validatedBy",
-                       rr.label AS "rejectionReason", s.rejection_note AS "rejectionNote"
+                       rr.label AS "rejectionReason", s.rejection_note AS "rejectionNote", s.high_intent_override AS "highIntentOverride"
                   FROM crm.sql_submission s JOIN crm.account a ON a.id = s.account_id JOIN crm.app_user u ON u.id = s.submitted_by
                   LEFT JOIN crm.city c ON c.id = s.city_id LEFT JOIN crm.stakeholder st ON st.id = s.qualifying_stakeholder_id
                   LEFT JOIN crm.stakeholder rf ON rf.id = s.referring_stakeholder_id LEFT JOIN crm.app_user v ON v.id = s.validated_by

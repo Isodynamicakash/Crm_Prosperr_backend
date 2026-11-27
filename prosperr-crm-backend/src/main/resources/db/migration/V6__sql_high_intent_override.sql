@@ -1,0 +1,2 @@
+-- A BDR can pass an SQL on high intent (with a written reason) even when ICP rules fail; the manager still validates it.
+ALTER TABLE crm.sql_submission ADD COLUMN high_intent_override boolean NOT NULL DEFAULT false;
