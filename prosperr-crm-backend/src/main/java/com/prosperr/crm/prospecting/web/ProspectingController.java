@@ -88,10 +88,11 @@ public class ProspectingController {
     @PostMapping("/tasks/{id}/complete")
     public void complete(@PathVariable UUID id) { tasks.complete(id, current.get()); }
 
-    public record Reschedule(Instant dueAt, UUID assigneeId) {}
+    /** Any field left out stays as it is: due date, assignee, the task's text and its type. */
+    public record Reschedule(Instant dueAt, UUID assigneeId, String title, TaskType type) {}
 
     @PatchMapping("/tasks/{id}")
     public void reschedule(@PathVariable UUID id, @RequestBody Reschedule r) {
-        tasks.reschedule(id, r.dueAt(), r.assigneeId(), current.get());
+        tasks.update(id, r.dueAt(), r.assigneeId(), r.title(), r.type(), current.get());
     }
 }

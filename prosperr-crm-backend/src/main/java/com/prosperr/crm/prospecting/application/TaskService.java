@@ -1,6 +1,7 @@
 package com.prosperr.crm.prospecting.application;
 
 import com.prosperr.crm.prospecting.api.TaskApi;
+import com.prosperr.crm.shared.domain.DomainException;
 import com.prosperr.crm.shared.domain.TaskType;
 import com.prosperr.crm.shared.jdbc.Db;
 import com.prosperr.crm.shared.security.Actor;
@@ -85,12 +86,21 @@ public class TaskService implements TaskApi {
 
     @Transactional
     public void reschedule(UUID taskId, Instant dueAt, UUID newAssignee, Actor actor) {
+        update(taskId, dueAt, newAssignee, null, null, actor);
+    }
+
+    /** Edit an open task: its text, type, due date/time, or (managers only) who it's for. Null leaves a field unchanged. */
+    @Transactional
+    public void update(UUID taskId, Instant dueAt, UUID newAssignee, String title, TaskType type, Actor actor) {
         UUID assignee = assignee(taskId);
         if (!actor.isLeadership() && !actor.userId().equals(assignee)) throw new ForbiddenException("Not your task");
         if (newAssignee != null && !actor.isLeadership()) throw new ForbiddenException("Only managers reassign tasks");
+        if (title != null && title.isBlank()) throw new DomainException("TASK_TITLE_REQUIRED", "The task needs some text");
         jdbc.update("""
-                UPDATE crm.task SET due_at = coalesce(:due, due_at), assignee_id = coalesce(:to, assignee_id) WHERE id = :id""",
-                new MapSqlParameterSource().addValue("id", taskId).addValue("due", Db.ts(dueAt)).addValue("to", newAssignee));
+                UPDATE crm.task SET due_at = coalesce(:due, due_at), assignee_id = coalesce(:to, assignee_id),
+                       title = coalesce(:title, title), type = coalesce(:type, type) WHERE id = :id""",
+                new MapSqlParameterSource().addValue("id", taskId).addValue("due", Db.ts(dueAt)).addValue("to", newAssignee)
+                        .addValue("title", title == null ? null : title.trim()).addValue("type", type == null ? null : type.name()));
     }
 
     private UUID assignee(UUID taskId) {
