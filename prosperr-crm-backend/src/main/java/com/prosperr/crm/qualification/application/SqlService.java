@@ -196,7 +196,8 @@ public class SqlService {
                         .addValue("city", f.account().cityId()).addValue("prio", Db.name(f.priority()))
                         .addValue("rel", req.businessRelevance().name()).addValue("intent", Db.name(intent))
                         .addValue("intentReason", intentReason).addValue("small", small)
-                        .addValue("smallReason", req.smallExceptionReason())
+                        .addValue("smallReason", override && small && (req.smallExceptionReason() == null || req.smallExceptionReason().isBlank())
+                                ? "High intent: " + intentReason : req.smallExceptionReason())
                         .addValue("bb", b.budgetId()).addValue("bbn", b.budgetNote()).addValue("ba", b.authorityId())
                         .addValue("ban", b.authorityNote()).addValue("bn", b.needId()).addValue("bnn", b.needNote())
                         .addValue("bt", b.timelineId()).addValue("btn", b.timelineNote()).addValue("override", override), UUID.class);
